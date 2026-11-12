@@ -409,6 +409,11 @@ absent 是正常的。
 35. **`iso_name()` 会给无点名字补 `.ELF`**：`/bin` 这种目录名要先按
     `BIN.ELF` 找、失败再按 `BIN` 找，否则目录永远打不开。
 
+36. **VMware 对 `resume_user` 的段寄存器顺序敏感**：先把 DS/ES/FS/GS
+    设成用户选择子（DPL=3），再做栈上的 `push`，VMware 会报 TRAP 9 并停机
+    （QEMU 不报）。改成**先压好 iret 帧和所有寄存器、最后才设段寄存器并切
+    CR3** 就正常；`enter_user` 早已是这个顺序，`resume_user` 这次也统一了。
+
 ## 7. 下一步（S7 之后）
 
 1. 可写文件系统（内存 tmpfs）→ `>`/`>>` 重定向到文件、`/tmp`；

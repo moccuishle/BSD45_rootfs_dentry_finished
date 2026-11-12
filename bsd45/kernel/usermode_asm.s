@@ -1,18 +1,9 @@
 /*
- * usermode_asm.s - ring 3 entry and int 0x80 stub.
+ * usermode_asm.s - ring 3 entry, int 0x80 stub and context resume.
  */
 
 	.text
 
-/*
- * void enter_user(unsigned pd, unsigned entry, unsigned esp)
- *
- * Build the whole ring-3 return frame first (while the kernel's own page
- * directory is still active), then switch CR3 and iret.  Reading the
- * selector variables after the CR3 switch is what broke on VMware: the
- * new directory does not necessarily keep the kernel's low mappings that
- * the pushl from memory needed.
- */
 	.globl	_enter_user
 	.align	4
 _enter_user:
@@ -25,7 +16,7 @@ _enter_user:
 	pushl	%edx			/* user esp */
 	pushfl
 	popl	%ebx
-	andl	$0xfffffdff, %ebx	/* IF=0: no timer IRQ yet */
+	andl	$0xfffffdff, %ebx
 	pushl	%ebx
 	pushl	%edi			/* user cs */
 	pushl	%ecx			/* eip */
@@ -36,10 +27,6 @@ _enter_user:
 	movl	%eax, %cr3
 	iret
 
-/*
- * int 0x80 entry.  Frame: ds es edi esi ebp esp ebx edx ecx eax
- *                      eip cs eflags uesp ss
- */
 	.globl	_syscall_entry
 	.align	4
 _syscall_entry:
@@ -60,21 +47,18 @@ _syscall_entry:
 /*
  * void resume_user(unsigned pd, struct sysregs *r)
  *
- * Restore a saved user context (struct sysregs: ds, es, edi, esi, ebp,
- * esp, ebx, edx, ecx, eax, eip, cs, eflags, uesp, ss) and return to ring 3.
- * Never returns.
+ * Frame layout after the pushes:
+ *   0 eip  4 cs  8 eflags  12 uesp  16 ss  20 user eax  24 user edi
+ *   28 user esi
  */
 	.globl	_resume_user
 	.align	4
 _resume_user:
 	movl	4(%esp), %eax		/* page directory */
 	movl	8(%esp), %esi		/* saved context */
-	movl	%eax, %cr3
-	movw	__udatasel, %ax
-	movw	%ax, %ds
-	movw	%ax, %es
-	movw	%ax, %fs
-	movw	%ax, %gs
+	pushl	12(%esi)		/* user esi */
+	pushl	8(%esi)			/* user edi */
+	pushl	36(%esi)		/* user eax */
 	pushl	56(%esi)		/* ss */
 	pushl	52(%esi)		/* user esp */
 	pushl	48(%esi)		/* eflags */
@@ -83,8 +67,14 @@ _resume_user:
 	movl	24(%esi), %ebx
 	movl	28(%esi), %edx
 	movl	32(%esi), %ecx
-	movl	36(%esi), %eax
 	movl	16(%esi), %ebp
-	movl	8(%esi), %edi
-	movl	12(%esi), %esi		/* last: clobbers the frame pointer */
+	movl	24(%esp), %edi		/* user edi */
+	movl	28(%esp), %esi		/* user esi */
+	movw	__udatasel, %dx
+	movw	%dx, %ds
+	movw	%dx, %es
+	movw	%dx, %fs
+	movw	%dx, %gs
+	movl	%eax, %cr3
+	movl	20(%esp), %eax		/* user eax */
 	iret
