@@ -17,7 +17,9 @@ $MKISO = Get-Mkisofs
 $isodir = Join-Path $bld "isodir"
 if (!$Kernel) { $Kernel = Join-Path $bld "bsd45.elf" }
 if (!$OutIso) { $OutIso = Join-Path $out "BSD45-ELF-x86.iso" }
-New-Item -ItemType Directory -Force -Path $out, $isodir | Out-Null
+New-Item -ItemType Directory -Force -Path $out | Out-Null
+if (Test-Path $isodir) { Remove-Item $isodir -Recurse -Force -ErrorAction SilentlyContinue }
+New-Item -ItemType Directory -Force -Path $isodir | Out-Null
 
 function Build-Stage([string]$src, [string]$text, [string]$name, [string]$entry = "_start") {
     $o = "$bld\$name.o"
