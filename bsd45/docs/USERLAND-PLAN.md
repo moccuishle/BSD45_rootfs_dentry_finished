@@ -115,6 +115,18 @@ execve + libc + /bin/sh**，最终 ISO 里是可执行的 i386 ELF 用户程序�
 
 尚未做：目录遍历、pipe/重定向、真 vnode/VFS、页回收。
 
+### S7 目录与管道 ✅
+
+- ISO9660 `iso_readdir()`、`iso_stat()`（目录/文件）；
+- 内核 `getdirentries` + fd 表 `FD_DIR`，`stat/fstat/access` 识别目录；
+- libc `opendir/readdir/closedir`、`glob/fnmatch`、`alphasort/mergesort`、
+  `fstatfs` 桩；新增 `/bin/ls`、`/bin/cat`；
+- pipe（8×4 KB 环），阻塞读写通过协程式挂起/唤醒，`close`/退出维护引用计数；
+- fd 0/1/2 的 `dup2`/`fcntl(F_DUPFD)` 支持；
+- 验收：`tools/test_s7.ps1`（ls、glob、`echo ... | cat`）。
+
+尚未做：可写文件系统/文件重定向、真 vnode/VFS、页回收、作业控制。
+
 
 ## 关键接口草案
 

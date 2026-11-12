@@ -34,6 +34,24 @@ main(int argc, char **argv)
 			    t.c_iflag, t.c_oflag, t.c_cflag, t.c_lflag);
 	}
 
+	{
+		int pfd[2];
+		char b[32];
+		int n;
+
+		if (pipe(pfd) == 0) {
+			write(pfd[1], "pipe-ok\n", 8);
+			n = read(pfd[0], b, sizeof(b));
+			if (n > 0) {
+				write(1, "pipe: ", 6);
+				write(1, b, n);
+			}
+			close(pfd[0]);
+			close(pfd[1]);
+		} else
+			printf("pipe: failed\n");
+	}
+
 	say("S:fork\n", 7);
 	pid = fork();
 	if (pid == 0) {

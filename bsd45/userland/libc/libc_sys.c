@@ -15,6 +15,7 @@
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <sys/mount.h>
 #include <sys/uio.h>
 #include <dirent.h>
 #include <termios.h>
@@ -100,6 +101,16 @@ sys3(int n, int a, int b, int c)
 }
 
 static int
+sys4(int n, int a, int b, int c, int d)
+{
+	int r;
+
+	__asm__ volatile("int $0x80"
+	    : "=a"(r) : "a"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
+	return (r);
+}
+
+static int
 sys1(int n, int a)
 {
 
@@ -151,6 +162,13 @@ lseek(int fd, off_t off, int whence)
 {
 
 	return (syscall_rv(sys3(199, fd, (int)off, whence)));
+}
+
+int
+getdirentries(int fd, char *buf, int nbytes, long *basep)
+{
+
+	return (syscall_rv(sys4(196, fd, (int)buf, nbytes, (int)basep)));
 }
 
 int
@@ -714,28 +732,6 @@ const char *const sys_siglist[32] = {
 	"SIGUSR1", "SIGUSR2"
 };
 
-DIR *
-opendir(const char *name)
-{
-
-	errno = ENOENT;
-	return (NULL);
-}
-
-struct dirent *
-readdir(DIR *dp)
-{
-
-	return (NULL);
-}
-
-int
-closedir(DIR *dp)
-{
-
-	return (-1);
-}
-
 #undef sigaddset
 #undef sigdelset
 #undef sigemptyset
@@ -802,3 +798,37 @@ sleep(unsigned int secs)
 	return (0);
 }
 
+/*
+ * The 4.4BSD opendir() checks the file system type and sorts directory
+ * blocks with mergesort()/alphasort(); the ISO9660 root is never a union
+ * mount, so a plain qsort stands in for mergesort.
+ */
+int
+fstatfs(int fd, struct statfs *buf)
+{
+	char *p = (char *)buf;
+	int i;
+
+	for (i = 0; i < (int)sizeof(*buf); i++)
+		p[i] = 0;
+	strcpy(buf->f_fstypename, "isofs");
+	buf->f_bsize = 2048;
+	return (0);
+}
+
+int
+alphasort(const void *a, const void *b)
+{
+
+	return (strcmp((*(const struct dirent **)a)->d_name,
+	    (*(const struct dirent **)b)->d_name));
+}
+
+int
+mergesort(void *base, size_t nmemb, size_t size,
+    int (*cmp)(const void *, const void *))
+{
+
+	qsort(base, nmemb, size, cmp);
+	return (0);
+}

@@ -37,7 +37,7 @@ function Prepare-Headers {
     Copy-Item (Join-Path $ws "userland\libc\histedit.h") "$incu\histedit.h" -Force
     if (Test-Path (Join-Path $incu "errno.h")) { return }
     Write-Step "preparing libc header view"
-    New-Item -ItemType Directory -Force -Path "$incu\sys", "$incu\machine" | Out-Null
+    New-Item -ItemType Directory -Force -Path "$incu\sys", "$incu\machine", "$incu\net" | Out-Null
     Get-ChildItem (Join-Path $usr "include") -File -Filter *.h | Copy-Item -Destination $incu -Force
     Get-ChildItem (Join-Path $usr "sys\sys") -File -Filter *.h | ForEach-Object {
         $dst = Join-Path $incu $_.Name
@@ -45,6 +45,7 @@ function Prepare-Headers {
     }
     Get-ChildItem (Join-Path $usr "sys\sys") -File -Filter *.h | Copy-Item -Destination "$incu\sys" -Force
     Get-ChildItem (Join-Path $usr "sys\i386\include") -File -Filter *.h | Copy-Item -Destination "$incu\machine" -Force
+    Get-ChildItem (Join-Path $usr "sys\net") -File -Filter *.h | Copy-Item -Destination "$incu\net" -Force
     Copy-Item (Join-Path $usr "sys\hp300\include\ansi.h") "$incu\machine\ansi.h" -Force
     Copy-Item (Join-Path $usr "sys\hp300\include\limits.h") "$incu\machine\limits.h" -Force
     Copy-Item (Join-Path $usr "sys\hp300\include\float.h") "$incu\machine\float.h" -Force
@@ -130,7 +131,9 @@ $libc_files = @(
     "stdio\fileno.c","stdio\feof.c","stdio\ferror.c","stdio\clrerr.c",
     "stdio\ungetc.c","stdio\gets.c","stdio\puts.c","stdio\getc.c",
     "stdio\getchar.c","stdio\fgetc.c",
-    "gen\isatty.c",
+    "gen\isatty.c","gen\opendir.c","gen\readdir.c","gen\closedir.c",
+    "gen\telldir.c","gen\seekdir.c","gen\rewinddir.c",
+    "gen\glob.c","gen\fnmatch.c",
     "stdio\stdio.c","stdio\fvwrite.c"
 )
 foreach ($f in $libc_files) {
@@ -259,15 +262,17 @@ if ($LASTEXITCODE -ne 0) { Write-Host "objcopy failed" -ForegroundColor Red; exi
 Write-Host ("built {0} ({1:N0} bytes)" -f $elf, (Get-Item $elf).Length)
 
 if ($Target -eq "sh") {
-    # /bin/echo: the first external command, linked against the same libc.
-    $echoobj = "$obj\echo.o"
-    if (Compile-C (Join-Path $ws "userland\echo.c") $echoobj) {
-        $eobjs = @($libobjs) + @($echoobj)
-        & $LD -m i386pe -Ttext 0x08048000 -e _start --subsystem console -o "$bld\echo.pe" @eobjs $libgcc 2>&1 | Select-Object -First 20
-        if ($LASTEXITCODE -eq 0) {
-            & $OC -O elf32-i386 -R .idata -R .reloc "$bld\echo.pe" "$outd\echo.elf"
+    # /bin/echo, /bin/ls: small tools linked against the same libc.
+    foreach ($tool in @("echo", "ls", "cat")) {
+        $tobj = "$obj\$tool.o"
+        if (Compile-C (Join-Path $ws "userland\$tool.c") $tobj) {
+            $tobjs = @($libobjs) + @($tobj)
+            & $LD -m i386pe -Ttext 0x08048000 -e _start --subsystem console -o "$bld\$tool.pe" @tobjs $libgcc 2>&1 | Select-Object -First 20
             if ($LASTEXITCODE -eq 0) {
-                Write-Host ("built {0} ({1:N0} bytes)" -f "$outd\echo.elf", (Get-Item "$outd\echo.elf").Length)
+                & $OC -O elf32-i386 -R .idata -R .reloc "$bld\$tool.pe" "$outd\$tool.elf"
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host ("built {0} ({1:N0} bytes)" -f "$outd\$tool.elf", (Get-Item "$outd\$tool.elf").Length)
+                }
             }
         }
     }

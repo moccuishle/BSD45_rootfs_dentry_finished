@@ -146,21 +146,27 @@ iso_root_size(void)
 }
 
 int
-iso_lookup(const char *path, unsigned *lba, unsigned *size)
+iso_stat(const char *path, unsigned *lba, unsigned *size, int *isdir)
 {
 	char name[64];
 	const char *p = path;
 	unsigned cur_lba = root_lba, cur_size = root_size;
-	int flags;
+	int flags, isfile;
 
 	if (!mounted)
 		return (-1);
 	while (*p == '/')
 		p++;
+	if (*p == 0) {			/* the root directory itself */
+		*lba = root_lba;
+		*size = root_size;
+		*isdir = 1;
+		return (0);
+	}
 
 	for (;;) {
 		const char *slash = p;
-		int n, isfile;
+		int n;
 
 		while (*slash && *slash != '/')
 			slash++;
@@ -171,18 +177,103 @@ iso_lookup(const char *path, unsigned *lba, unsigned *size)
 			return (-1);
 		isfile = (*slash == 0);
 		iso_name(name, p, n, isfile);
-		if (find_in_dir(cur_lba, cur_size, name, lba, size, &flags) < 0)
-			return (-1);
-		if (isfile)
+		if (find_in_dir(cur_lba, cur_size, name, lba, size, &flags) < 0) {
+			/*
+			 * The last component may be a directory: iso_name()
+			 * appends ".ELF" to dotless names for exec paths, so
+			 * retry with the bare name before giving up.
+			 */
+			if (!isfile)
+				return (-1);
+			iso_name(name, p, n, 0);
+			if (find_in_dir(cur_lba, cur_size, name, lba,
+			    size, &flags) < 0)
+				return (-1);
+			isfile = 0;
+		}
+		if (isfile) {
+			*isdir = 0;
 			return ((flags & 2) ? -1 : 0);
+		}
 		if ((flags & 2) == 0)		/* not a directory */
 			return (-1);
+		if (*slash == 0) {		/* the path ends at a directory */
+			*isdir = 1;
+			return (0);
+		}
 		cur_lba = *lba;
 		cur_size = *size;
 		p = slash;
 		while (*p == '/')
 			p++;
 	}
+}
+
+int
+iso_lookup(const char *path, unsigned *lba, unsigned *size)
+{
+	int isdir;
+
+	if (iso_stat(path, lba, size, &isdir) < 0 || isdir)
+		return (-1);
+	return (0);
+}
+
+/*
+ * Return the next directory entry at (lba, size), starting at *posp.
+ * Names come back lower case with the ";1" version suffix and any trailing
+ * dot removed.  Returns 0 on success, 1 at end of directory, -1 on error.
+ */
+int
+iso_readdir(unsigned lba, unsigned size, unsigned *posp, char *name,
+    unsigned *elba, unsigned *esize, int *eflags)
+{
+	unsigned pos = *posp;
+	unsigned char *rec;
+	int len, nlen, i, j;
+
+	while (pos < size) {
+		if (atapi_read(lba + pos / ISO_SECTOR, 1, secbuf) < 0)
+			return (-1);
+		rec = secbuf + (pos % ISO_SECTOR);
+		len = rec[0];
+		if (len == 0) {			/* padding to the next sector */
+			pos = (pos / ISO_SECTOR + 1) * ISO_SECTOR;
+			continue;
+		}
+		if ((pos % ISO_SECTOR) + len > ISO_SECTOR) {
+			pos = (pos / ISO_SECTOR + 1) * ISO_SECTOR;
+			continue;
+		}
+		nlen = rec[32];
+		if (nlen == 1 && (rec[33] == 0 || rec[33] == 1)) {
+			pos += len;		/* "." and ".." */
+			continue;
+		}
+		if (nlen <= 0 || nlen > 48) {
+			pos += len;
+			continue;
+		}
+		/* copy, lower case, stop at ';' */
+		for (i = 0, j = 0; i < nlen && j < 40; i++) {
+			char c = rec[33 + i];
+
+			if (c == ';')
+				break;
+			if (c >= 'A' && c <= 'Z')
+				c = c - 'A' + 'a';
+			name[j++] = c;
+		}
+		while (j > 0 && name[j - 1] == '.')
+			j--;
+		name[j] = 0;
+		*elba = le32(rec + 2);
+		*esize = le32(rec + 10);
+		*eflags = rec[25];
+		*posp = pos + len;
+		return (0);
+	}
+	return (1);
 }
 
 int

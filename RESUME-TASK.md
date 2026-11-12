@@ -1,8 +1,8 @@
 # BSD45-ELF-x86 任务恢复文本
 
 更新时间：2026-11-13（Asia/Shanghai）
-状态：**S6 完成**（控制台 tty/termios，isatty 为真，sh 交互提示符）。
-下一步：目录遍历、pipe/重定向、真 vnode/VFS。
+状态：**S7 完成**（目录遍历/通配符 + pipe 管道）。
+下一步：可写文件系统/重定向到文件、真 vnode/VFS、页回收。
 仓库：https://github.com/moccuishle/BSD45_rootfs_shell_finished
 
 本机环境（网吧 Windows，无管理员、防火墙不可关）：
@@ -43,6 +43,7 @@ ISO，最终 ISO 启动后进入用户态运行 BSD 的 `/bin/sh`。
 | S4 | ATAPI(PIO) + ISO9660 只读 root；`/sbin/init`、`/bin/sh` 是光盘文件 | ✅ 本次完成（核心） |
 | S5 | fork/vfork/wait4、进程表与调度、`/bin/echo` 外部命令 | ✅ 本次完成 |
 | S6 | 控制台 tty：termios ioctl、行规程、`isatty` 为真、sh 交互提示符 | ✅ 本次完成 |
+| S7 | 目录遍历（`getdirentries`/`opendir`/`readdir`、`ls`、通配符）+ pipe 管道 | ✅ 本次完成 |
 
 ### S3 验收（`powershell -File tools\test_s3.ps1`）
 
@@ -187,6 +188,48 @@ ring3 入口都不依赖 QEMU。
 - libc 的 `tcgetattr/tcsetattr` 改走 `ioctl(TIOCGETA/TIOCSETA)`，于是
   4.4BSD 的 `isatty()`（其实现就是 tcgetattr 成功）返回真；
 - `init` 在非 `-c` 模式下给 sh 加 `-i`，sh 才进入交互模式并打印 PS1（`# `）。
+
+
+### S7 验收（`powershell -File tools\test_s7.ps1`）
+
+```
+bsd45> shell
+# ls /
+bin
+boot.cat
+boot.img
+bsd45.elf
+hello.elf
+readme.txt
+sbin
+test.elf
+# ls /bin
+cat.elf
+echo.elf
+ls.elf
+sh.elf
+# echo /bin/*
+/bin/cat.elf /bin/echo.elf /bin/ls.elf /bin/sh.elf
+# echo hello-pipe | cat
+hello-pipe
+# exit 0
+[user exit 0]
+```
+
+### S7 实现要点
+
+- ISO9660 目录枚举：`iso_readdir()` 逐条读目录记录（记录不跨扇区），名字转小写、
+  去掉 `;1` 版本号和尾部点；`iso_stat()` 现在能返回目录本身（`/`、`/bin`）；
+- 内核 `getdirentries(fd, buf, n, basep)`：fd 表新增 `FD_DIR`，每次返回一条
+  `struct dirent`（`d_type` 目录=4/文件=8），`lseek` 对目录改的是记录游标；
+- `stat/fstat/access` 对目录返回 `S_IFDIR`（0755），`ls` 因此能判断参数是目录；
+- libc 补齐 4.4BSD 的 `opendir/readdir/closedir/telldir/seekdir/rewinddir`、
+  `glob/fnmatch`、`alphasort/mergesort` 与 `fstatfs` 桩；
+- 新增 `/bin/ls`（自己的小实现）和 `/bin/cat`（管道的读者）；
+- pipe：8 个 4 KB 环形缓冲，read/write 在空/满时挂起进程（和 wait4 同一套
+  “保存 sysregs、由对端唤醒”的机制，唤醒时借用对端页目录把数据直接拷进
+  用户缓冲），`close`/退出时维护读写端引用计数并唤醒对端；
+- fd 0/1/2 的 `dup2`/`fcntl(F_DUPFD)` 现在优先查 fd 表，才落到控制台。
 
 ## 3. S3 做了什么
 
@@ -356,12 +399,22 @@ absent 是正常的。
     **先压好整个 ring3 返回帧、最后再切 CR3 + iret**；`resume_user` 同理，
     它的 iret 帧全部从栈上取，不读内核全局。
 
-## 7. 下一步（S6 之后）
+32. **fd 0/1/2 不能写死成控制台**：`read` 里 `if (fd == 0)` 直接走
+    控制台，会让 `dup2(pipefd, 0)` 失效。要先查 fd 表，只有未 dup 时才落
+    到控制台。
+33. **sh 的重定向用的是 `fcntl(F_DUPFD)`**（`copyfd()`），不是 `dup2`；
+    fcntl 不实现，`|` 看起来“没报错但没接线”。
+34. **进程退出必须关闭 fd**：管道写端引用计数不减，读者就永远等不到 EOF，
+    表现为 `[no runnable process]` 死锁。
+35. **`iso_name()` 会给无点名字补 `.ELF`**：`/bin` 这种目录名要先按
+    `BIN.ELF` 找、失败再按 `BIN` 找，否则目录永远打不开。
 
-1. 目录：`getdirentries` + `opendir/readdir`，支持 `ls`、通配符；
-2. pipe + `dup2`：`|`、`>`、`<` 重定向（`dup2` 已有，`pipe` 还是 ENOSYS）；
-3. 真 vnode/VFS 与 vm_map，替换 ramfs 数组 + ISO9660 特判；
-4. 页回收（fork/exec 的物理页只分配不释放）；
-5. 更多设备：`/dev/null`、`/dev/zero`、`/dev/console` 节点。
+## 7. 下一步（S7 之后）
+
+1. 可写文件系统（内存 tmpfs）→ `>`/`>>` 重定向到文件、`/tmp`；
+2. 真 vnode/VFS 与 vm_map，替换 ramfs 数组 + ISO9660 特判；
+3. 页回收（fork/exec/管道页只分配不释放）；
+4. 更多工具（`grep`、`wc`、`mkdir`）与作业控制；
+5. 从 4.4BSD 源码直接编译更多 `usr.bin` 程序。
 
 恢复方式：打开本文件，按第 5 节构建，从第 7 节继续。

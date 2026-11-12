@@ -90,11 +90,21 @@ static struct file ramfs[] = {
 	{ 0, 0, 0 }
 };
 
+#define	FD_FILE	0
+#define	FD_DIR	1
+#define	FD_PIPE	2
+
 struct fd {
 	const unsigned char	*d;
 	unsigned		len;
 	unsigned		off;
 	int			used;
+	int			type;		/* FD_FILE, FD_DIR or FD_PIPE */
+	unsigned		lba;		/* directory start lba */
+	unsigned		dsize;		/* directory size in bytes */
+	unsigned		dpos;		/* next directory record offset */
+	int			pipeidx;	/* pipe table slot */
+	int			rw;		/* 1 = read end, 2 = write end */
 };
 
 /* saved user context, filled by syscall_entry/enter_user */
@@ -111,6 +121,10 @@ struct sysregs {
 
 struct uproc {
 	int		state;
+	int		pipeidx;	/* pipe we are blocked on */
+	int		piperw;		/* 1 = read, 2 = write */
+	unsigned	pipeat;		/* pending user buffer */
+	unsigned	pipelen;	/* pending user length */
 	int		pid;		/* 1 = init */
 	int		ppid;
 	unsigned	pd;		/* page directory */
@@ -398,13 +412,191 @@ fd_alloc(struct file *f)
 	for (i = 3; i < NFD; i++) {
 		if (!cur->fds[i].used) {
 			cur->fds[i].used = 1;
+			cur->fds[i].type = FD_FILE;
 			cur->fds[i].d = f->f_data;
 			cur->fds[i].len = *f->f_len;
 			cur->fds[i].off = 0;
+			cur->fds[i].lba = 0;
+			cur->fds[i].dsize = 0;
+			cur->fds[i].dpos = 0;
+			cur->fds[i].pipeidx = -1;
+			cur->fds[i].rw = 0;
 			return (i);
 		}
 	}
 	return (-1);
+}
+
+static int
+fd_alloc_dir(unsigned lba, unsigned size)
+{
+	int i;
+
+	for (i = 3; i < NFD; i++) {
+		if (!cur->fds[i].used) {
+			cur->fds[i].used = 1;
+			cur->fds[i].type = FD_DIR;
+			cur->fds[i].d = 0;
+			cur->fds[i].len = size;
+			cur->fds[i].off = 0;
+			cur->fds[i].lba = lba;
+			cur->fds[i].dsize = size;
+			cur->fds[i].dpos = 0;
+			cur->fds[i].pipeidx = -1;
+			cur->fds[i].rw = 0;
+			return (i);
+		}
+	}
+	return (-1);
+}
+
+
+/* ---------------------------------------------------------------- pipes */
+
+static struct uproc *proc_find(int pid);
+static void proc_sched(void);
+
+#define	NPIPE	8
+#define	PIPESZ	4096
+
+struct pipe {
+	int		used;
+	int		readers;
+	int		writers;
+	unsigned	rpos, wpos, count;
+	int		rpid;		/* pid blocked in read */
+	int		wpid;		/* pid blocked in write */
+	unsigned char	buf[PIPESZ];
+};
+
+static struct pipe pipes[NPIPE];
+
+static struct pipe *
+pipe_alloc(void)
+{
+	int i;
+
+	for (i = 0; i < NPIPE; i++) {
+		if (!pipes[i].used) {
+			bzero(&pipes[i], sizeof(pipes[i]));
+			pipes[i].used = 1;
+			return (&pipes[i]);
+		}
+	}
+	return (0);
+}
+
+static void
+pipe_copy(unsigned pd, unsigned va, const void *kbuf, unsigned n, int touser)
+{
+	unsigned save;
+
+	__asm__ volatile("movl %%cr3,%0" : "=r"(save));
+	__asm__ volatile("movl %0,%%cr3" :: "r"(pd) : "memory");
+	if (touser)
+		bcopy(kbuf, (void *)va, n);
+	else
+		bcopy((const void *)va, (void *)kbuf, n);
+	__asm__ volatile("movl %0,%%cr3" :: "r"(save) : "memory");
+}
+
+/*
+ * Hand pending data to a reader blocked inside read().  The copy happens in
+ * the writer's context, so the reader's page directory is installed for the
+ * duration; the kernel is mapped in both.
+ */
+static void
+pipe_wake_reader(struct pipe *pp, int eof)
+{
+	struct uproc *p;
+	unsigned n, first;
+
+	if (pp->rpid == 0)
+		return;
+	p = proc_find(pp->rpid);
+	pp->rpid = 0;
+	if (p == 0 || p->state != P_BLOCKED || p->pipeidx != pp - pipes)
+		return;
+	if (eof) {
+		p->regs.eax = 0;
+		p->state = P_RUN;
+		return;
+	}
+	n = pp->count;
+	if (n > p->pipelen)
+		n = p->pipelen;
+	first = PIPESZ - pp->rpos;
+	if (first > n)
+		first = n;
+	pipe_copy(p->pd, p->pipeat, pp->buf + pp->rpos, first, 1);
+	if (n > first)
+		pipe_copy(p->pd, p->pipeat + first, pp->buf, n - first, 1);
+	pp->rpos = (pp->rpos + n) % PIPESZ;
+	pp->count -= n;
+	p->regs.eax = n;
+	p->state = P_RUN;
+}
+
+static void
+pipe_wake_writer(struct pipe *pp, int epipe)
+{
+	struct uproc *p;
+	unsigned space, n, first;
+
+	if (pp->wpid == 0)
+		return;
+	p = proc_find(pp->wpid);
+	pp->wpid = 0;
+	if (p == 0 || p->state != P_BLOCKED || p->pipeidx != pp - pipes)
+		return;
+	if (epipe) {
+		p->regs.eax = (unsigned)-EPIPE;
+		p->state = P_RUN;
+		return;
+	}
+	space = PIPESZ - pp->count;
+	n = p->pipelen;
+	if (n > space)
+		n = space;
+	first = PIPESZ - pp->wpos;
+	if (first > n)
+		first = n;
+	pipe_copy(p->pd, p->pipeat, pp->buf + pp->wpos, first, 0);
+	if (n > first)
+		pipe_copy(p->pd, p->pipeat + first, pp->buf, n - first, 0);
+	pp->wpos = (pp->wpos + n) % PIPESZ;
+	pp->count += n;
+	p->regs.eax = n;
+	p->state = P_RUN;
+}
+
+static void
+fd_close(int fd)
+{
+	struct fd *fp;
+	struct pipe *pp;
+
+	if (fd < 0 || fd >= NFD || !cur->fds[fd].used)
+		return;
+	fp = &cur->fds[fd];
+	if (fp->type == FD_PIPE && fp->pipeidx >= 0 &&
+	    fp->pipeidx < NPIPE) {
+		pp = &pipes[fp->pipeidx];
+		if (fp->rw == 1)
+			pp->readers--;
+		else if (fp->rw == 2)
+			pp->writers--;
+		if (pp->readers <= 0)
+			pipe_wake_writer(pp, 1);
+		if (pp->writers <= 0)
+			pipe_wake_reader(pp, 1);
+		if (pp->readers <= 0 && pp->writers <= 0 &&
+		    pp->wpid == 0 && pp->rpid == 0) {
+			pp->used = 0;
+			fp->pipeidx = -1;
+		}
+	}
+	fp->used = 0;
 }
 
 /* --------------------------------------------------------------- process */
@@ -539,6 +731,18 @@ do_fork(struct sysregs *r)
 	p->pd = pd;
 	p->brk_mapped = cur->brk_mapped;
 	bcopy(cur->fds, p->fds, sizeof(p->fds));
+	{
+		int i;
+
+		for (i = 0; i < NFD; i++)
+			if (p->fds[i].used && p->fds[i].type == FD_PIPE &&
+			    p->fds[i].pipeidx >= 0) {
+				if (p->fds[i].rw == 1)
+					pipes[p->fds[i].pipeidx].readers++;
+				else if (p->fds[i].rw == 2)
+					pipes[p->fds[i].pipeidx].writers++;
+			}
+	}
 	p->regs = *r;
 	p->regs.eax = 0;		/* the child returns 0 from fork() */
 
@@ -614,6 +818,13 @@ proc_exit(int code)
 		reaped = 1;		/* the parent's wait4 gets the status */
 	}
 
+	{
+		int fd;
+
+		for (fd = 0; fd < NFD; fd++)
+			if (cur->fds[fd].used)
+				fd_close(fd);
+	}
 	cur->exitcode = code;
 	cur->state = reaped ? P_FREE : P_ZOMBIE;
 	if (cur->ppid == 0) {
@@ -887,7 +1098,58 @@ syscall_dispatch(struct sysregs *r)
 		unsigned fd = r->ebx, buf = r->ecx, len = r->edx;
 		unsigned i;
 
-		if ((fd != 1 && fd != 2) || !user_ok(buf, len)) {
+		if (!user_ok(buf, len)) {
+			r->eax = (unsigned)-EFAULT;
+			break;
+		}
+		if (fd >= NFD) {
+			r->eax = (unsigned)-EBADF;
+			break;
+		}
+		if (cur->fds[fd].used && cur->fds[fd].type == FD_PIPE) {
+			struct pipe *pp = &pipes[cur->fds[fd].pipeidx];
+			unsigned space, n, first;
+
+			if (cur->fds[fd].rw != 2) {
+				r->eax = (unsigned)-EBADF;
+				break;
+			}
+			if (pp->readers <= 0) {
+				r->eax = (unsigned)-EPIPE;
+				break;
+			}
+			space = PIPESZ - pp->count;
+			if (space == 0) {
+				cur->regs = *r;
+				cur->state = P_BLOCKED;
+				cur->pipeidx = pp - pipes;
+				cur->piperw = 2;
+				cur->pipeat = buf;
+				cur->pipelen = len;
+				pp->wpid = cur->pid;
+				proc_sched();
+				break;		/* resumed by the reader */
+			}
+			n = len;
+			if (n > space)
+				n = space;
+			first = PIPESZ - pp->wpos;
+			if (first > n)
+				first = n;
+			bcopy((char *)buf, pp->buf + pp->wpos, first);
+			if (n > first)
+				bcopy((char *)buf + first, pp->buf, n - first);
+			pp->wpos = (pp->wpos + n) % PIPESZ;
+			pp->count += n;
+			pipe_wake_reader(pp, 0);
+			r->eax = n;
+			break;
+		}
+		if (cur->fds[fd].used && fd >= 3) {	/* file: not writable */
+			r->eax = (unsigned)-EBADF;
+			break;
+		}
+		if (fd < 0 || fd > 2) {
 			r->eax = (unsigned)-EBADF;
 			break;
 		}
@@ -904,12 +1166,54 @@ syscall_dispatch(struct sysregs *r)
 			r->eax = (unsigned)-EINVAL;
 			break;
 		}
-		if (fd == 0) {
+		if (fd == 0 && (fd >= NFD || !cur->fds[0].used)) {
 			r->eax = (unsigned)console_read((char *)buf, len);
 			break;
 		}
 		if (fd >= NFD || !cur->fds[fd].used) {
 			r->eax = (unsigned)-EBADF;
+			break;
+		}
+		if (cur->fds[fd].type == FD_DIR) {
+			r->eax = (unsigned)-EISDIR;
+			break;
+		}
+		if (cur->fds[fd].type == FD_PIPE) {
+			struct pipe *pp = &pipes[cur->fds[fd].pipeidx];
+			unsigned n, first;
+
+			if (cur->fds[fd].rw != 1) {
+				r->eax = (unsigned)-EBADF;
+				break;
+			}
+			if (pp->count == 0) {
+				if (pp->writers <= 0) {		/* EOF */
+					r->eax = 0;
+					break;
+				}
+				cur->regs = *r;
+				cur->state = P_BLOCKED;
+				cur->pipeidx = pp - pipes;
+				cur->piperw = 1;
+				cur->pipeat = buf;
+				cur->pipelen = len;
+				pp->rpid = cur->pid;
+				proc_sched();
+				break;		/* resumed by the writer */
+			}
+			n = pp->count;
+			if (n > len)
+				n = len;
+			first = PIPESZ - pp->rpos;
+			if (first > n)
+				first = n;
+			bcopy(pp->buf + pp->rpos, (char *)buf, first);
+			if (n > first)
+				bcopy(pp->buf, (char *)buf + first, n - first);
+			pp->rpos = (pp->rpos + n) % PIPESZ;
+			pp->count -= n;
+			pipe_wake_writer(pp, 0);
+			r->eax = n;
 			break;
 		}
 		while (i < len && cur->fds[fd].off < cur->fds[fd].len)
@@ -920,24 +1224,30 @@ syscall_dispatch(struct sysregs *r)
 	case 5: {			/* open(path, flags, mode) */
 		char path[128];
 		struct file *f;
-		int fd;
+		unsigned lba, dsize;
+		int fd, isdir;
 
 		if (user_str(r->ebx, path, sizeof(path)) < 0) {
 			r->eax = (unsigned)-EFAULT;
 			break;
 		}
 		f = fs_lookup(path);
-		if (f == 0) {
-			r->eax = (unsigned)-ENOENT;
+		if (f != 0) {
+			fd = fd_alloc(f);
+			r->eax = (fd < 0) ? (unsigned)-EMFILE : (unsigned)fd;
 			break;
 		}
-		fd = fd_alloc(f);
-		r->eax = (fd < 0) ? (unsigned)-EMFILE : (unsigned)fd;
+		if (iso_mounted() &&
+		    iso_stat(path, &lba, &dsize, &isdir) == 0 && isdir) {
+			fd = fd_alloc_dir(lba, dsize);
+			r->eax = (fd < 0) ? (unsigned)-EMFILE : (unsigned)fd;
+			break;
+		}
+		r->eax = (unsigned)-ENOENT;
 		break;
 	}
 	case 6:				/* close(fd) */
-		if (r->ebx < NFD)
-			cur->fds[r->ebx].used = 0;
+		fd_close((int)r->ebx);
 		r->eax = 0;
 		break;
 	case 59: {			/* execve(path, argv, envp) */
@@ -986,12 +1296,15 @@ syscall_dispatch(struct sysregs *r)
 		break;
 	case 33: {			/* access(path, mode) */
 		char path[128];
+		unsigned lba, size;
+		int isdir;
 
 		if (user_str(r->ebx, path, sizeof(path)) < 0) {
 			r->eax = (unsigned)-EFAULT;
 			break;
 		}
-		if (fs_lookup(path) != 0 || isofile_exists(path))
+		if (fs_lookup(path) != 0 || isofile_exists(path) ||
+		    (iso_mounted() && iso_stat(path, &lba, &size, &isdir) == 0))
 			r->eax = 0;
 		else
 			r->eax = (unsigned)-ENOENT;
@@ -1062,21 +1375,21 @@ syscall_dispatch(struct sysregs *r)
 		r->eax = old;
 		break;
 	}
-	case 92:			/* fcntl */
-		r->eax = 0;
-		break;
 	case 189: {			/* stat(path, sb) */
 		char path[128];
 		struct file *f;
 		unsigned lba, size;
+		int isdir;
 
 		if (user_str(r->ebx, path, sizeof(path)) < 0 ||
 		    !user_ok(r->ecx, STAT_SIZE)) {
 			r->eax = (unsigned)-EFAULT;
 			break;
 		}
-		if (iso_mounted() && iso_lookup(path, &lba, &size) == 0) {
-			fill_stat(0100755, size, (unsigned *)r->ecx);
+		if (iso_mounted() &&
+		    iso_stat(path, &lba, &size, &isdir) == 0) {
+			fill_stat(isdir ? 0040755 : 0100755, size,
+			    (unsigned *)r->ecx);
 			r->eax = 0;
 			break;
 		}
@@ -1103,8 +1416,56 @@ syscall_dispatch(struct sysregs *r)
 			r->eax = (unsigned)-EBADF;
 			break;
 		}
-		fill_stat(0100755, cur->fds[r->ebx].len, (unsigned *)r->ecx);
+		fill_stat(cur->fds[r->ebx].type == FD_DIR ? 0040755 : 0100755,
+		    cur->fds[r->ebx].len, (unsigned *)r->ecx);
 		r->eax = 0;
+		break;
+	}
+	case 196: {			/* getdirentries(fd, buf, n, basep) */
+		unsigned fd = r->ebx, buf = r->ecx, nb = r->edx, basep = r->esi;
+		struct fd *fp;
+		char name[48];
+		unsigned elba, esize, pos;
+		int eflags, rv, namlen, reclen;
+
+		if (fd >= NFD || !cur->fds[fd].used ||
+		    cur->fds[fd].type != FD_DIR) {
+			r->eax = (unsigned)-EBADF;
+			break;
+		}
+		if (!user_ok(buf, nb) || nb < 16) {
+			r->eax = (unsigned)-EINVAL;
+			break;
+		}
+		fp = &cur->fds[fd];
+		pos = fp->dpos;
+		rv = iso_readdir(fp->lba, fp->dsize, &pos, name, &elba,
+		    &esize, &eflags);
+		if (rv < 0) {
+			r->eax = (unsigned)-EIO;
+			break;
+		}
+		if (basep != 0 && user_ok(basep, 4))
+			*(unsigned *)basep = 0;
+		if (rv > 0) {		/* end of directory */
+			fp->dpos = pos;
+			r->eax = 0;
+			break;
+		}
+		namlen = strlen(name);
+		reclen = (8 + namlen + 1 + 3) & ~3;
+		if ((unsigned)reclen > nb) {
+			r->eax = (unsigned)-EINVAL;
+			break;
+		}
+		bzero((char *)buf, reclen);
+		*(unsigned *)(buf + 0) = elba;		/* d_fileno */
+		*(unsigned short *)(buf + 4) = reclen;	/* d_reclen */
+		((char *)buf)[6] = (eflags & 2) ? 4 : 8;	/* d_type */
+		((char *)buf)[7] = namlen;		/* d_namlen */
+		bcopy(name, (char *)buf + 8, namlen + 1);
+		fp->dpos = pos;
+		r->eax = reclen;
 		break;
 	}
 	case 199: {			/* lseek(fd, off, whence) */
@@ -1112,6 +1473,16 @@ syscall_dispatch(struct sysregs *r)
 
 		if (fd >= NFD || !cur->fds[fd].used) {
 			r->eax = (unsigned)-EBADF;
+			break;
+		}
+		if (cur->fds[fd].type == FD_DIR) {
+			if (wh == 0)
+				cur->fds[fd].dpos = off;
+			else if (wh == 1)
+				cur->fds[fd].dpos += off;
+			else
+				cur->fds[fd].dpos = cur->fds[fd].dsize;
+			r->eax = cur->fds[fd].dpos;
 			break;
 		}
 		if (wh == 0)
@@ -1135,19 +1506,127 @@ syscall_dispatch(struct sysregs *r)
 	case 66:			/* vfork */
 		r->eax = (unsigned)do_vfork(r);
 		break;
-	case 41:			/* dup */
-		r->eax = (unsigned)-ENOSYS;
-		break;
-	case 42:			/* pipe */
-		r->eax = (unsigned)-ENOSYS;
-		break;
-	case 90: {			/* dup2(from, to) */
-		if (r->ecx < NFD && (int)r->ebx >= 0 && r->ebx < NFD) {
-			cur->fds[r->ecx] = cur->fds[r->ebx];
-			r->eax = r->ecx;
-		} else {
+	case 92: {			/* fcntl(fd, cmd, arg) */
+		int fd = (int)r->ebx, cmd = (int)r->ecx, arg = (int)r->edx;
+
+		if (fd < 0 || fd >= NFD || !cur->fds[fd].used) {
 			r->eax = (unsigned)-EBADF;
+			break;
 		}
+		if (cmd == 0) {		/* F_DUPFD: lowest free fd >= arg */
+			int newfd;
+
+			for (newfd = arg; newfd < NFD; newfd++)
+				if (!cur->fds[newfd].used)
+					break;
+			if (newfd >= NFD) {
+				r->eax = (unsigned)-EMFILE;
+				break;
+			}
+			cur->fds[newfd] = cur->fds[fd];
+			if (cur->fds[newfd].type == FD_PIPE &&
+			    cur->fds[newfd].pipeidx >= 0) {
+				if (cur->fds[newfd].rw == 1)
+					pipes[cur->fds[newfd].pipeidx].readers++;
+				else
+					pipes[cur->fds[newfd].pipeidx].writers++;
+			}
+			r->eax = newfd;
+			break;
+		}
+		if (cmd >= 1 && cmd <= 4) {	/* F_GETFD/F_SETFD/F_GETFL/F_SETFL */
+			r->eax = 0;
+			break;
+		}
+		r->eax = (unsigned)-EINVAL;
+		break;
+	}
+	case 41: {			/* dup(fd) */
+		int from = (int)r->ebx, to;
+
+		if (from < 0 || from >= NFD || !cur->fds[from].used) {
+			r->eax = (unsigned)-EBADF;
+			break;
+		}
+		for (to = 3; to < NFD; to++)
+			if (!cur->fds[to].used)
+				break;
+		if (to >= NFD) {
+			r->eax = (unsigned)-EMFILE;
+			break;
+		}
+		cur->fds[to] = cur->fds[from];
+		if (cur->fds[to].type == FD_PIPE && cur->fds[to].pipeidx >= 0) {
+			if (cur->fds[to].rw == 1)
+				pipes[cur->fds[to].pipeidx].readers++;
+			else
+				pipes[cur->fds[to].pipeidx].writers++;
+		}
+		r->eax = to;
+		break;
+	}
+	case 42: {			/* pipe(fds) */
+		struct pipe *pp;
+		unsigned fds[2];
+		int i, nfd = 0;
+
+		if (!user_ok(r->ebx, 2 * sizeof(int))) {
+			r->eax = (unsigned)-EFAULT;
+			break;
+		}
+		pp = pipe_alloc();
+		if (pp == 0) {
+			r->eax = (unsigned)-EMFILE;
+			break;
+		}
+		pp->readers = 1;
+		pp->writers = 1;
+		for (i = 3; i < NFD && nfd < 2; i++) {
+			if (!cur->fds[i].used) {
+				fds[nfd++] = i;
+				cur->fds[i].used = 1;
+				cur->fds[i].type = FD_PIPE;
+				cur->fds[i].pipeidx = pp - pipes;
+				cur->fds[i].d = 0;
+				cur->fds[i].len = 0;
+				cur->fds[i].off = 0;
+				cur->fds[i].lba = 0;
+				cur->fds[i].dsize = 0;
+				cur->fds[i].dpos = 0;
+				cur->fds[i].rw = (nfd == 1) ? 1 : 2;
+			}
+		}
+		if (nfd < 2) {
+			pp->used = 0;
+			r->eax = (unsigned)-EMFILE;
+			break;
+		}
+		((int *)r->ebx)[0] = fds[0];
+		((int *)r->ebx)[1] = fds[1];
+		r->eax = 0;
+		break;
+	}
+	case 90: {			/* dup2(from, to) */
+		int from = (int)r->ebx, to = (int)r->ecx;
+
+		if (from < 0 || from >= NFD || to < 0 || to >= NFD ||
+		    !cur->fds[from].used) {
+			r->eax = (unsigned)-EBADF;
+			break;
+		}
+		if (from == to) {
+			r->eax = to;
+			break;
+		}
+		fd_close(to);
+		cur->fds[to] = cur->fds[from];
+		if (cur->fds[to].type == FD_PIPE && cur->fds[to].pipeidx >= 0) {
+			if (cur->fds[to].rw == 1)
+				pipes[cur->fds[to].pipeidx].readers++;
+			else
+				pipes[cur->fds[to].pipeidx].writers++;
+		}
+		r->eax = to;
 		break;
 	}
 	case 12:			/* chdir */
