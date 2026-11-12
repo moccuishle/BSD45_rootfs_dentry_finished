@@ -1,4 +1,4 @@
-/* echo(1) - the first external command for BSD44-ELF-x86. */
+/* echo(1) - the first external command for BSD45-ELF-x86. */
 #include <stdio.h>
 #include <string.h>
 

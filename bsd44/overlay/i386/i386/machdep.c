@@ -72,7 +72,7 @@ extern vm_offset_t avail_end;
 #include <i386/isa/rtc.h>
 #include <i386/i386/cons.h>
 
-#ifdef BSD44_TRACE
+#ifdef BSD45_TRACE
 #define MTRACE(c) outb(0xE9, (c))
 #else
 #define MTRACE(c)

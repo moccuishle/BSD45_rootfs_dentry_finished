@@ -1,5 +1,5 @@
 /*
- * libc_sys.c - 4.4BSD userland C library glue for BSD44-ELF-x86.
+ * libc_sys.c - 4.4BSD userland C library glue for BSD45-ELF-x86.
  *
  * The 4.4BSD i386 libc enters the kernel with `lcall $7,$0`; this port uses
  * `int $0x80` with the arguments in %ebx/%ecx/%edx/%esi/%edi and a negative

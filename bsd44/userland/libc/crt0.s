@@ -1,5 +1,5 @@
 /*
- * crt0.s - C runtime start-up for BSD44-ELF-x86 user programs.
+ * crt0.s - C runtime start-up for BSD45-ELF-x86 user programs.
  *
  * The kernel enters a new image with the stack holding
  *	argc, argv[0..argc-1], NULL, envp[0..], NULL, strings...

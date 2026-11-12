@@ -1,5 +1,5 @@
 /*
- * stage1.s - El Torito no-emulation boot sector for BSD44-ELF-x86.
+ * stage1.s - El Torito no-emulation boot sector for BSD45-ELF-x86.
  *
  * Runs in 16-bit real mode at 0x7C00.  Reads the ELF kernel from a fixed
  * LBA (recorded in the manifest by mkiso.ps1), copies the 32-bit stage 2
@@ -157,7 +157,7 @@ chunk:		.long	0
 bufseg:		.word	0
 boot_drive:	.byte	0
 
-msg_hello:	.asciz "BSD44-ELF-x86 boot\r\n"
+msg_hello:	.asciz "BSD45-ELF-x86 boot\r\n"
 msg_load:	.asciz "loading ELF kernel...\r\n"
 msg_stage2:	.asciz "entering protected mode...\r\n"
 msg_err:	.asciz "disk read error\r\n"

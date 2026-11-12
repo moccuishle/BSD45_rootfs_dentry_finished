@@ -1,4 +1,4 @@
-/* Freestanding <stdarg.h> for the BSD44 userland build.
+/* Freestanding <stdarg.h> for the BSD45 userland build.
  * GCC provides the intrinsics; we just expose the standard names so that
  * -nostdinc builds do not need the compiler's include_next chain. */
 #ifndef _STDARG_H_

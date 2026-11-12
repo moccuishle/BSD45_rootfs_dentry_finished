@@ -52,7 +52,7 @@ function Wait-Text([string]$t, [int]$ms) {
 }
 
 try {
-    if (-not (Wait-Text "bsd44>" 20000)) { throw "no monitor prompt" }
+    if (-not (Wait-Text "bsd45>" 20000)) { throw "no monitor prompt" }
     foreach ($k in $Keys) {
         $bytes = [Text.Encoding]::ASCII.GetBytes($k + "`r")
         $sns.Write($bytes, 0, $bytes.Length); $sns.Flush()

@@ -1,4 +1,4 @@
-/* /bin/sh - minimal interactive shell over BSD44 syscalls */
+/* /bin/sh - minimal interactive shell over BSD45 syscalls */
 static char buf[128];
 
 static int

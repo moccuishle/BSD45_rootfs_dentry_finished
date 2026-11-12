@@ -70,7 +70,7 @@ function Wait-Text([string]$text, [int]$ms) {
 }
 
 try {
-    if (-not (Wait-Text "bsd44>" ($BootTimeoutSec * 1000))) { throw "boot timeout: no monitor prompt" }
+    if (-not (Wait-Text "bsd45>" ($BootTimeoutSec * 1000))) { throw "boot timeout: no monitor prompt" }
     Start-Sleep -Milliseconds $SettleMs
     foreach ($k in $Keys) {
         $bytes = [Text.Encoding]::ASCII.GetBytes($k + "`r")

@@ -165,7 +165,7 @@ monitor(void)
 	printf("BSD/386 monitor - type 'help' for commands\n");
 
 	for (;;) {
-		printf("bsd44> ");
+		printf("bsd45> ");
 		if (getline() == 0)
 			continue;
 

@@ -113,10 +113,10 @@
 	.globl _##name; _##name:
 
 /*
- * BSD44_TRACE: QEMU isa-debugcon (port 0xE9) progress markers used while
- * bringing the port up.  Compiled out unless -DBSD44_TRACE is given.
+ * BSD45_TRACE: QEMU isa-debugcon (port 0xE9) progress markers used while
+ * bringing the port up.  Compiled out unless -DBSD45_TRACE is given.
  */
-#ifdef BSD44_TRACE
+#ifdef BSD45_TRACE
 #define	TRACE(c)	movb $c, %al ; outb %al, $0xE9
 #else
 #define	TRACE(c)

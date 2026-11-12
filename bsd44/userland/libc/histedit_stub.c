@@ -1,5 +1,5 @@
 /*
- * histedit_stub.c - no line editing on BSD44-ELF-x86 (no tty ioctls).
+ * histedit_stub.c - no line editing on BSD45-ELF-x86 (no tty ioctls).
  *
  * The 4.4BSD sh always links against libedit.  This kernel has no termios
  * and no terminal, so provide the handful of entry points sh references
