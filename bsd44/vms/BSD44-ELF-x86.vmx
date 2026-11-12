@@ -1,0 +1,22 @@
+.encoding = "windows-1252"
+config.version = "8"
+virtualHW.version = "12"
+displayName = "BSD44-ELF-x86"
+guestOS = "other"
+memsize = "64"
+numvcpus = "1"
+
+# El Torito CD (the ISO contains an ELF32 kernel, not a PE image)
+ide1:0.present = "TRUE"
+ide1:0.deviceType = "cdrom-image"
+ide1:0.fileName = "..\out\BSD44-ELF-x86.iso"
+ide1:0.startConnected = "TRUE"
+
+ide0:0.present = "FALSE"
+floppy0.present = "FALSE"
+ethernet0.present = "FALSE"
+usb.present = "FALSE"
+sound.present = "FALSE"
+
+bios.bootOrder = "cdrom"
+bios.hddOrder = ""
