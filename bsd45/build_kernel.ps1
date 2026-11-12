@@ -7,7 +7,7 @@ param(
 
 $ErrorActionPreference = "Continue"
 $ws   = Split-Path -Parent $MyInvocation.MyCommand.Path
-$src  = Join-Path $ws "src\4.4BSD-Lite2\usr\src\sys"
+$src  = Join-Path $ws "src\BSD45\usr\src\sys"
 $bld  = Join-Path $ws "build"
 $obj  = Join-Path $bld "obj"
 $inc  = Join-Path $bld "inc"
@@ -33,12 +33,18 @@ if (!(Test-Path "$src\i386\i386\locore.s") -or !(Test-Path "$src\sys\param.h")) 
         throw "4.4BSD-Lite2.tar.gz not found next to the project; put it in the parent directory"
     }
     Write-Host "extracting $tarball"
-    if (Test-Path $src) { Remove-Item $src -Recurse -Force -ErrorAction SilentlyContinue }
+    $srcdir = Join-Path $ws "src\BSD45"
+    if (Test-Path $srcdir) { Remove-Item $srcdir -Recurse -Force -ErrorAction SilentlyContinue }
     New-Item -ItemType Directory -Force -Path "$ws\src" | Out-Null
     # Use the Windows bsdtar: MSYS2's GNU tar (first on PATH here) mishandles
     # Windows -C paths.  bsdtar also skips the tree's broken symlinks for us.
     $tarExe = Join-Path $env:SystemRoot "System32\tar.exe"
     & $tarExe -xzf $tarball -C "$ws\src" 2>$null
+    # the tarball unpacks as 4.4BSD-Lite2/; the project tree calls it BSD45/
+    $extracted = Join-Path $ws "src\4.4BSD-Lite2"
+    if ((Test-Path $extracted) -and !(Test-Path (Join-Path $ws "src\BSD45"))) {
+        Rename-Item $extracted (Join-Path $ws "src\BSD45") -Force
+    }
     if (!(Test-Path "$src\i386\i386\locore.s")) {
         throw "extraction failed: $src\i386\i386\locore.s missing"
     }

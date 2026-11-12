@@ -12,7 +12,7 @@
 | i686 工具链 | `C:\msys64\mingw32\bin`（GCC 16.2.0，pacman 装的 mingw-w64-i686-gcc） |
 | mkisofs | `C:\Program Files (x86)\VMware\VMware Workstation\mkisofs.exe` |
 | QEMU | `C:\msys64\ucrt64\bin\qemu-system-i386.exe`（11.1.3） |
-| 4.4BSD 源码 | `src\4.4BSD-Lite2`（由 `..\4.4BSD-Lite2.tar.gz` 解出） |
+| 4.4BSD 源码 | `src\BSD45`（由 `..\4.4BSD-Lite2.tar.gz` 解出） |
 | 4.3BSD-Reno 源码 | `C:\Users\Administrator\Desktop\work\reno-src-main`（ctype 等参考） |
 
 > 注意：`C:\msys64\mingw32\i686-w64-mingw32\bin\as.exe` / `ld.exe` 是坏的
