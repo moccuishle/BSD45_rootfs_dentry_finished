@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <termios.h>
 
 static char *vav[3] = { "echo", "vfork-exec-ok", 0 };
 static char *venv[2] = { "PATH=/bin", 0 };
@@ -21,6 +22,17 @@ main(int argc, char **argv)
 {
 	pid_t pid;
 	int status;
+
+	{
+		struct termios t;
+		int r = tcgetattr(0, &t);
+
+		printf("tty: isatty=%d/%d/%d tcgetattr=%d\n",
+		    isatty(0), isatty(1), isatty(2), r);
+		if (r == 0)
+			printf("tty: iflag=%x oflag=%x cflag=%x lflag=%x\n",
+			    t.c_iflag, t.c_oflag, t.c_cflag, t.c_lflag);
+	}
 
 	say("S:fork\n", 7);
 	pid = fork();

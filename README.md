@@ -135,24 +135,22 @@ VMware 提示：启动后先**点一下 VM 窗口**再敲键盘（VMware 需要�
 这是一颗 **可启动的 4.4BSD-Lite2 i386 内核 + 最小用户态**：保护模式、分页、
 GDT/IDT/TSS、物理内存探测、Mach pmap 引导、可交互 monitor 均已跑通。
 
-S1–S5 之后，ISO 的内核会自己用 ATAPI(PIO) 读光盘、挂上 **ISO9660 root**，
+S1–S6 之后，ISO 的内核会自己用 ATAPI(PIO) 读光盘、挂上 **ISO9660 root**，
 `/sbin/init` 与**真正的 4.4BSD `/bin/sh`** 都是光盘上的文件；内核有进程表、
-`fork/vfork/wait4/exit` 与一个协程式调度器，所以 sh **能跑外部命令**：
+`fork/vfork/wait4/exit`（sh 能跑外部命令），还有**控制台 tty**：
+`isatty()` 为真、`tcgetattr()` 返回规范模式 termios、行编辑（退格/^U/^W/^D）、
+交互 sh 打印 `# ` 提示符。
 
 ```
 bsd45> shell
-/bin/echo one
-one
-execve /bin/echo: from ISO9660 (70412 bytes, lba 239)
-echo st=$?
-st=0
+# echo hi-tty
+hi-tty
 ```
 
-它**还不是**完整系统：没有 tty（无行编辑/作业控制）、没有目录遍历
-（`opendir/readdir` 仍是 stub）、没有 pipe（`|` 与重定向还不通）、没有真
-vnode/VFS（root 是只读 ISO9660 + ramfs 兜底）。
-“ISO 内装 ELF 内核 + El Torito 引导、内核不是 PE”“从光盘挂 root 跑 BSD
-`/bin/sh`”“fork/exec 外部命令”三个目标都已达成。
+它**还不是**完整系统：没有目录遍历（`opendir/readdir` 仍是 stub）、没有
+pipe（`|` 与重定向还不通）、没有真 vnode/VFS（root 是只读 ISO9660 + ramfs
+兜底）。“ELF 内核 + El Torito 引导”“从光盘挂 root 跑 BSD `/bin/sh`”
+“fork/exec 外部命令”“控制台 tty 与交互 sh”四个目标都已达成。
 
 
 ## 许可
@@ -211,23 +209,15 @@ GCC 版本不必是 16.2.0：include 路径由 `gcc -print-file-name=include` �
 交叉工具链（或 i686-elf-gcc）并改写构建命令；COFF→PE→objcopy 的思路不变，
 `overlay/` 里的源码修补与引导器可以直接复用。
 
-## 用户态进度（S5）
+## 用户态进度（S6）
 
-- 已完成：ring3、`execve`（argv/envp）、`int 0x80`、4.4BSD libc 子集、
-  真正的 `/bin/sh`、**ATAPI + ISO9660 root**、**fork/vfork/wait4/exit +
-  进程调度**、外部命令 `/bin/echo`；
+- 已完成：ring3、`execve`、`int 0x80`、4.4BSD libc 子集、真正的 `/bin/sh`、
+  **ATAPI + ISO9660 root**、**fork/vfork/wait4 + 进程调度**、外部命令
+  `/bin/echo`、**控制台 tty/termios**（`isatty`、行规程、交互提示符）；
 - monitor 命令：
   - `usermode` → 从光盘加载 `init -c 'echo hello; exit 3'`；
-  - `shell` → 交互 `/bin/sh`（内建命令 + **外部命令**，`$?` 正确）；
-  - `test` → 进程自检（fork 子进程退出 5、vfork + exec `/bin/echo` + wait4）；
+  - `shell` → 交互 `/bin/sh`（`# ` 提示符、内建 + 外部命令、`$?`）；
+  - `test` → 自检（进程 fork/vfork/wait4 + `isatty`/termios 报告）；
   - `cd` → ISO9660 挂载信息；
-- 启动日志：`atapi: <型号>`、`atapi: capacity N sectors`、
-  `root: ISO9660 on ATAPI CD, root dir lba N`；
-- 仍然没有：tty/termios、目录遍历、pipe、真 vnode/VFS；fork/exec 的物理页
-  只分配不回收。路线见
-  [`bsd45/docs/USERLAND-PLAN.md`](bsd45/docs/USERLAND-PLAN.md)。
-
-用户态程序用 `bsd45/build_userland.ps1`、`bsd45/build_sh.ps1`（libc + sh +
-echo）构建：COFF → PE(0x08048000) → `objcopy -O elf32-i386`；
-`build_iso.ps1` 把 `BIN/SH.ELF`、`BIN/ECHO.ELF`、`SBIN/INIT.ELF`、`TEST.ELF`
-放进 ISO。用户态必须 `-march=i386 -mno-sse`。
+- 仍然没有：目录遍历、pipe、真 vnode/VFS；fork/exec 的物理页只分配不回收。
+  路线见 [`bsd45/docs/USERLAND-PLAN.md`](bsd45/docs/USERLAND-PLAN.md)。

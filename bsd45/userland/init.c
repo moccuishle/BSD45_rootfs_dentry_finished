@@ -48,6 +48,8 @@ start_c(int argc, char **argv, char **envp)
 	if (argc >= 3 && argv[1][0] == '-' && argv[1][1] == 'c') {
 		sh_argv[n++] = "-c";
 		sh_argv[n++] = argv[2];
+	} else {
+		sh_argv[n++] = "-i";	/* interactive: sh prints its prompt */
 	}
 	sh_argv[n] = 0;
 

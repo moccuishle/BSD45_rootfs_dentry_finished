@@ -105,6 +105,16 @@ execve + libc + /bin/sh**，最终 ISO 里是可执行的 i386 ELF 用户程序�
 
 尚未做：tty/termios、目录、pipe、页回收、真 vnode/VFS。
 
+### S6 控制台 tty ✅
+
+- 内核 `ioctl`：`TIOCGETA/TIOCSETA*/TIOCGWINSZ/TIOCGPGRP`（fd 0..2）；
+- 行规程：回显、退格、`^U`/`^W`/`^D`/`^C`；
+- libc `tcgetattr/tcsetattr` 走 ioctl，`isatty()` 因此为真；
+- init 交互模式给 sh 传 `-i`，出现 `# ` 提示符；
+- 验收：`tools/test_tty.ps1`（isatty=1/1/1、ICANON|ECHO、交互 sh）。
+
+尚未做：目录遍历、pipe/重定向、真 vnode/VFS、页回收。
+
 
 ## 关键接口草案
 

@@ -19,6 +19,8 @@
 #include <sys/types.h>
 #include <sys/proc.h>
 #include <sys/user.h>
+#include <sys/termios.h>
+#include <sys/ttycom.h>
 
 #include <vm/vm.h>
 #include <vm/vm_page.h>
@@ -773,6 +775,108 @@ exec_image(const char *path, unsigned uargv, unsigned uenvp, struct sysregs *r)
 	return (0);
 }
 
+
+/*
+ * Canonical console input for fd 0: echo, erase (BS/DEL), kill (^U),
+ * word-erase (^W) and EOF (^D on an empty line).
+ */
+static int
+console_read(char *buf, unsigned len)
+{
+	unsigned i = 0;
+	int c;
+
+	while (i < len - 1) {
+		c = cngetc();
+		if (c == 0)
+			continue;
+		if (c == '\r' || c == '\n') {
+			cnputc('\n');
+			buf[i++] = '\n';
+			break;
+		}
+		if (c == '\b' || c == 0x7f) {
+			if (i > 0) {
+				i--;
+				cnputc('\b');
+				cnputc(' ');
+				cnputc('\b');
+			}
+			continue;
+		}
+		if (c == 0x15) {		/* ^U: kill line */
+			while (i > 0) {
+				i--;
+				cnputc('\b');
+				cnputc(' ');
+				cnputc('\b');
+			}
+			continue;
+		}
+		if (c == 0x17) {		/* ^W: kill word */
+			while (i > 0 && (buf[i - 1] == ' ' || buf[i - 1] == '\t')) {
+				i--;
+				cnputc('\b');
+				cnputc(' ');
+				cnputc('\b');
+			}
+			while (i > 0 && buf[i - 1] != ' ' && buf[i - 1] != '\t') {
+				i--;
+				cnputc('\b');
+				cnputc(' ');
+				cnputc('\b');
+			}
+			continue;
+		}
+		if (c == 0x04)			/* ^D: EOF on an empty line */
+			break;
+		if (c == 0x03) {		/* ^C: drop the line */
+			cnputc('^');
+			cnputc('C');
+			cnputc('\n');
+			i = 0;
+			continue;
+		}
+		if (c < 0x20 && c != '\t')
+			continue;
+		cnputc(c);
+		buf[i++] = c;
+	}
+	return ((int)i);
+}
+
+/*
+ * Termios for the console.  There is no real UART line discipline: the
+ * console is always in canonical mode with echo, which is exactly what
+ * isatty(3)/sh want to see.
+ */
+static int
+console_termios(unsigned arg, int get)
+{
+	struct termios *t = (struct termios *)arg;
+
+	if (!user_ok(arg, sizeof(*t)))
+		return (-EFAULT);
+	if (get) {
+		bzero(t, sizeof(*t));
+		t->c_iflag = ICRNL | IXON;
+		t->c_oflag = OPOST | ONLCR;
+		t->c_cflag = CS8 | CREAD | CLOCAL | B9600;
+		t->c_lflag = ICANON | ECHO | ECHOE | ISIG | IEXTEN;
+		t->c_cc[VINTR] = 3;
+		t->c_cc[VEOF] = 4;
+		t->c_cc[VERASE] = 0x7f;
+		t->c_cc[VKILL] = 0x15;
+		t->c_cc[VSTART] = 0x11;
+		t->c_cc[VSTOP] = 0x13;
+		t->c_cc[VSUSP] = 0x1a;
+		t->c_cc[VMIN] = 1;
+		t->c_cc[VTIME] = 0;
+	}
+	/* TIOCSETA*: accept and ignore, the console flags are fixed */
+	return (0);
+}
+
 void
 syscall_dispatch(struct sysregs *r)
 {
@@ -795,35 +899,13 @@ syscall_dispatch(struct sysregs *r)
 	case 3: {			/* read(fd, buf, len) */
 		unsigned fd = r->ebx, buf = r->ecx, len = r->edx;
 		unsigned i = 0;
-		int c;
 
 		if (!user_ok(buf, len) || len == 0) {
 			r->eax = (unsigned)-EINVAL;
 			break;
 		}
 		if (fd == 0) {
-			while (i < len - 1) {
-				c = cngetc();
-				if (c == 0)
-					continue;
-				if (c == '\r' || c == '\n') {
-					cnputc('\n');
-					((char *)buf)[i++] = '\n';
-					break;
-				}
-				if (c == '\b') {
-					if (i > 0) {
-						i--;
-						cnputc('\b');
-						cnputc(' ');
-						cnputc('\b');
-					}
-					continue;
-				}
-				cnputc(c);
-				((char *)buf)[i++] = c;
-			}
-			r->eax = i;
+			r->eax = (unsigned)console_read((char *)buf, len);
 			break;
 		}
 		if (fd >= NFD || !cur->fds[fd].used) {
@@ -924,9 +1006,55 @@ syscall_dispatch(struct sysregs *r)
 		else
 			r->eax = 0;
 		break;
-	case 54:			/* ioctl */
-		r->eax = (unsigned)-ENOTTY;
+	case 54: {			/* ioctl(fd, request, arg) */
+		unsigned fd = r->ebx;
+		unsigned long req = r->ecx;
+		unsigned arg = r->edx;
+
+		if (fd > 2) {
+			r->eax = (unsigned)-ENOTTY;
+			break;
+		}
+		switch (req) {
+		case TIOCGETA:
+			r->eax = (unsigned)console_termios(arg, 1);
+			break;
+		case TIOCSETA:
+		case TIOCSETAW:
+		case TIOCSETAF:
+			r->eax = (unsigned)console_termios(arg, 0);
+			break;
+		case TIOCGWINSZ: {
+			struct winsize *w = (struct winsize *)arg;
+
+			if (!user_ok(arg, sizeof(*w))) {
+				r->eax = (unsigned)-EFAULT;
+				break;
+			}
+			w->ws_row = 25;
+			w->ws_col = 80;
+			w->ws_xpixel = 0;
+			w->ws_ypixel = 0;
+			r->eax = 0;
+			break;
+		}
+		case TIOCGPGRP:
+			if (!user_ok(arg, 4)) {
+				r->eax = (unsigned)-EFAULT;
+				break;
+			}
+			*(int *)arg = 1;
+			r->eax = 0;
+			break;
+		case TIOCSPGRP:
+			r->eax = 0;
+			break;
+		default:
+			r->eax = (unsigned)-ENOTTY;
+			break;
+		}
 		break;
+	}
 	case 60: {			/* umask(mask) */
 		unsigned old = umask_val;
 

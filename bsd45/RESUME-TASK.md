@@ -1,8 +1,8 @@
 # BSD45-ELF-x86 任务恢复文本
 
 更新时间：2026-11-13（Asia/Shanghai）
-状态：**S5 完成**（fork/vfork/wait4，sh 可跑外部命令）。
-下一步：tty/termios、目录支持、真 vnode/VFS。
+状态：**S6 完成**（控制台 tty/termios，isatty 为真，sh 交互提示符）。
+下一步：目录遍历、pipe/重定向、真 vnode/VFS。
 仓库：https://github.com/moccuishle/BSD45_rootfs_shell_finished
 
 本机环境（网吧 Windows，无管理员、防火墙不可关）：
@@ -42,6 +42,7 @@ ISO，最终 ISO 启动后进入用户态运行 BSD 的 `/bin/sh`。
 | S3 | 4.4BSD libc 子集 + **真正的 BSD `/bin/sh`** | ✅ 本次完成 |
 | S4 | ATAPI(PIO) + ISO9660 只读 root；`/sbin/init`、`/bin/sh` 是光盘文件 | ✅ 本次完成（核心） |
 | S5 | fork/vfork/wait4、进程表与调度、`/bin/echo` 外部命令 | ✅ 本次完成 |
+| S6 | 控制台 tty：termios ioctl、行规程、`isatty` 为真、sh 交互提示符 | ✅ 本次完成 |
 
 ### S3 验收（`powershell -File tools\test_s3.ps1`）
 
@@ -154,6 +155,35 @@ exit 0
   收走僵尸）；`vfork` = 复制地址空间 + 父进程阻塞到子进程 exec/exit；
 - `getpid/getppid/kill` 按进程表返回；`stat/access` 现在也会查 ISO9660，
   这样 sh 的 `PATH` 查找能找到 `/bin/echo`。
+
+
+### S6 验收（`powershell -File tools\test_tty.ps1`）
+
+```
+bsd45> test
+tty: isatty=1/1/1 tcgetattr=0
+tty: iflag=300 oflag=3 cflag=af80 lflag=58a
+...
+bsd45> shell
+# echo hi-tty
+hi-tty
+# exit 0
+[user exit 0]
+```
+
+即：`isatty(0/1/2)` 全为真、`tcgetattr()` 返回规范模式的 termios
+（`ICANON|ECHO|ISIG|IEXTEN`），交互 `/bin/sh` 也终于打出 `# ` 提示符。
+
+### S6 实现要点
+
+- 内核 `ioctl(54)`：`TIOCGETA/TIOCSETA/TIOCSETAW/TIOCSETAF`（fd 0..2）、
+  `TIOCGWINSZ`（80x25）、`TIOCGPGRP/TIOCSPGRP`，其余仍返回 ENOTTY；
+- 常量直接来自 4.4BSD 的 `sys/ttycom.h` / `sys/termios.h`（termios 44 字节）；
+- 控制台行规程 `console_read()`：回显、退格、`^U` 删行、`^W` 删词、
+  `^D` 空行 EOF、`^C` 丢弃当前行；
+- libc 的 `tcgetattr/tcsetattr` 改走 `ioctl(TIOCGETA/TIOCSETA)`，于是
+  4.4BSD 的 `isatty()`（其实现就是 tcgetattr 成功）返回真；
+- `init` 在非 `-c` 模式下给 sh 加 `-i`，sh 才进入交互模式并打印 PS1（`# `）。
 
 ## 3. S3 做了什么
 
@@ -309,12 +339,20 @@ absent 是正常的。
     踩父进程的栈帧（我们的测试程序就踩过）。本实现改为“复制 + 父进程阻塞”，
     是 vfork 的安全超集。
 
-## 7. 下一步（S5 之后）
+28. **tty 的 ioctl 号不要手写**：`TIOCGETA` 等是用 `_IOR/_IOW` 按
+    `sizeof(struct termios)` 算出来的，termios 在 4.4BSD 里是 44 字节
+    （含 `c_ispeed/c_ospeed`）；直接 include `sys/ttycom.h` 最稳。
+29. **`isatty()` 就是 `tcgetattr()` 成功**：libc 的 isatty 只做这一件事，
+    所以 tty 支持只要把 tcgetattr 接到 `TIOCGETA` 上即可。
+30. **sh 的提示符要 `-i`**：4.4BSD sh 不会因为 stdin 是 tty 就自动进入
+    交互模式（要 `iflag`），init 里显式传 `-i` 才会打印 PS1。
 
-1. tty/termios：`/dev/console` + `isatty` 为真，行编辑与作业控制；
-2. 目录：`getdirentries` + `opendir/readdir`，让 `ls`/通配符可用；
-3. pipe + `dup2`：`|` 与重定向（目前 `dup2` 有、`pipe` 返回 ENOSYS）；
-4. 真 vnode/VFS 与 vm_map，替换现在的 ramfs 数组 + ISO9660 特判；
-5. 简单文件系统缓存与页回收（现在 fork/exec 的页只分配不回收）。
+## 7. 下一步（S6 之后）
+
+1. 目录：`getdirentries` + `opendir/readdir`，支持 `ls`、通配符；
+2. pipe + `dup2`：`|`、`>`、`<` 重定向（`dup2` 已有，`pipe` 还是 ENOSYS）；
+3. 真 vnode/VFS 与 vm_map，替换 ramfs 数组 + ISO9660 特判；
+4. 页回收（fork/exec 的物理页只分配不释放）；
+5. 更多设备：`/dev/null`、`/dev/zero`、`/dev/console` 节点。
 
 恢复方式：打开本文件，按第 5 节构建，从第 7 节继续。

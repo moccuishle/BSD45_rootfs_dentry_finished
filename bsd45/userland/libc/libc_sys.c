@@ -609,16 +609,14 @@ int
 tcgetattr(int fd, struct termios *t)
 {
 
-	errno = ENOTTY;
-	return (-1);
+	return (ioctl(fd, TIOCGETA, t));
 }
 
 int
 tcsetattr(int fd, int actions, const struct termios *t)
 {
 
-	errno = ENOTTY;
-	return (-1);
+	return (ioctl(fd, TIOCSETA, t));
 }
 
 int
