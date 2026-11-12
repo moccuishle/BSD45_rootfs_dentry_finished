@@ -26,6 +26,9 @@
 #include <machine/psl.h>
 #include <machine/pmap.h>
 
+#include "atapi.h"
+#include "isofs.h"
+
 /* GCC builtins: the mingw <stdarg.h> is only an include_next stub. */
 typedef __builtin_va_list	va_list;
 #define	va_start(ap, last)	__builtin_va_start(ap, last)
@@ -258,6 +261,32 @@ main(vm_offset_t firstaddr)
 	    virtual_avail, virtual_end);
 	printf("Console: VGA 80x25, COM1 %s\n",
 	    pccom_present() ? "present" : "absent");
+
+	/*
+	 * S4: mount the ISO9660 root from the El Torito CD.  execve() will
+	 * load /sbin/init and /bin/sh from it, with the embedded ramfs
+	 * images as a fallback.
+	 */
+	if (atapi_probe() == 0) {
+		char vendor[9], product[17];
+
+		if (atapi_inquiry(vendor, product) == 0)
+			printf("atapi: %s %s\n", vendor, product);
+		else
+			printf("atapi: INQUIRY failed\n");
+		{
+			unsigned cap;
+
+			if (atapi_capacity(&cap) == 0)
+				printf("atapi: capacity %d sectors\n", cap + 1);
+		}
+		if (iso_mount() == 0)
+			printf("root: ISO9660 on ATAPI CD, root dir lba %d, %d bytes\n",
+			    iso_root(), iso_root_size());
+		else
+			printf("root: ATAPI device found but no ISO9660 volume\n");
+	} else
+		printf("root: no ATAPI CD-ROM, using embedded ramfs\n");
 	printf("\n");
 
 	monitor();

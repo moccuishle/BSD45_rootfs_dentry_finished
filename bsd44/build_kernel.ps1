@@ -208,6 +208,8 @@ $c_sources = [ordered]@{
     "stubs.o"    = @("c",   "$ws\kernel\stubs.c")
     "glue.o"     = @("c",   "$ws\kernel\glue.c")
     "mon.o"      = @("c",   "$ws\kernel\mon.c")
+    "atapi.o"    = @("c",   "$ws\kernel\atapi.c")
+    "isofs.o"    = @("c",   "$ws\kernel\isofs.c")
 }
 
 $objs = @()

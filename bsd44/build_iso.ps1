@@ -1,4 +1,4 @@
-﻿# build_iso.ps1 - build the El Torito boot image and the BSD44-ELF-x86 ISO
+# build_iso.ps1 - build the El Torito boot image and the BSD44-ELF-x86 ISO
 param(
     [string]$Kernel = "",
     [string]$OutIso = "",
@@ -58,6 +58,17 @@ if ($off -lt 0) { throw "manifest magic not found" }
 [IO.File]::WriteAllBytes("$bld\boot.img", $img)
 
 Copy-Item $Kernel "$isodir\BSD44.ELF" -Force
+
+# S4: the userland programs live on the ISO9660 volume, not in the kernel.
+New-Item -ItemType Directory -Force -Path "$isodir\BIN", "$isodir\SBIN" | Out-Null
+$sh = Join-Path $ws "out\userland\sh.elf"
+$init = Join-Path $ws "out\userland\init.elf"
+$hello = Join-Path $ws "out\userland\hello.elf"
+$test = Join-Path $ws "out\userland\test.elf"
+if (Test-Path $sh)    { Copy-Item $sh    "$isodir\BIN\SH.ELF"   -Force }
+if (Test-Path $init)  { Copy-Item $init  "$isodir\SBIN\INIT.ELF" -Force }
+if (Test-Path $hello) { Copy-Item $hello "$isodir\HELLO.ELF"    -Force }
+if (Test-Path $test)  { Copy-Item $test  "$isodir\TEST.ELF"     -Force }
 Copy-Item "$bld\boot.img" "$isodir\boot.img" -Force
 Copy-Item "$ws\README-ISO.txt" "$isodir\README.TXT" -Force -ErrorAction SilentlyContinue
 

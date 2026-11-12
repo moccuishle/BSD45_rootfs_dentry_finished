@@ -79,11 +79,19 @@ execve + libc + /bin/sh**，最终 ISO 里是可执行的 i386 ELF 用户程序�
   `el` 保持 NULL，输入退回 `read(2)`；
 - `brk` 按页对齐推进；`struct stat` 必须按 4.4BSD i386 的 96 字节布局填。
 
-### S4 真 root 文件系统
+### S4 真 root 文件系统 ✅（核心完成）
 
-- CD-ROM：ATAPI/ISO9660（`isofs/cd9660`）或 ATA + FFS；
-- `/etc/rc`、`/dev/console`、基本设备节点；
-- 验收：从 ISO9660 直接挂 root，启动到 `sh` 交互提示符。
+- `kernel/atapi.c`：两条 IDE 通道探测 ATAPI CD-ROM（IDENTIFY PACKET），
+  SCSI READ(12) + PIO 读 2048 字节扇区；
+- `kernel/isofs.c`：ISO9660 PVD/目录项解析，`/bin/sh` → `BIN/SH.ELF`；
+- `execve` 优先从光盘读镜像（`CD_IMAGE_VA 0xFE400000` 临时映射），
+  失败回退内嵌 ramfs；
+- `build_iso.ps1` 把 `sh.elf/init.elf/hello.elf/test.elf` 放进 ISO；
+- 验收：`tools/test_s4.ps1` —— `root: ISO9660 on ATAPI CD` +
+  `execve /bin/sh: from ISO9660 (175504 bytes, lba 353)` + `hello` + 退出码 3。
+
+尚未做：`/etc/rc`、`/dev/console`、mount 表、真 vnode/VFS、多 extent 文件。
+
 
 ## 关键接口草案
 

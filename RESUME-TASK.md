@@ -1,7 +1,8 @@
 # BSD44-ELF-x86 任务恢复文本
 
 更新时间：2026-11-13（Asia/Shanghai）
-状态：**S3 完成**，下一步 S4（真 root 文件系统 / ISO9660）。
+状态：**S4 核心完成**（ATAPI + ISO9660 root，sh/init 从光盘加载）。
+下一步：fork/wait、tty、真 vnode/VFS。
 仓库：https://github.com/moccuishle/BSD4.4_rootfs_filesystem_x86_ISO_ELF_El-Torito-
 
 本机环境（网吧 Windows，无管理员、防火墙不可关）：
@@ -39,7 +40,7 @@ ISO，最终 ISO 启动后进入用户态运行 BSD 的 `/bin/sh`。
 | S1 | ring3、用户页目录/栈、ELF32 装载、`int 0x80` | ✅ |
 | S2 | ramfs、fd 表、`execve`（含 argv/envp）、`/sbin/init` → `/bin/sh` | ✅ |
 | S3 | 4.4BSD libc 子集 + **真正的 BSD `/bin/sh`** | ✅ 本次完成 |
-| S4 | 真 VFS/vnode、vm_map、FFS 或 ISO9660 root、从光盘挂载 | ⬜ 未开始 |
+| S4 | ATAPI(PIO) + ISO9660 只读 root；`/sbin/init`、`/bin/sh` 是光盘文件 | ✅ 本次完成（核心） |
 
 ### S3 验收（`powershell -File tools\test_s3.ps1`）
 
@@ -68,6 +69,42 @@ exit 7
 即：ISO 里的 `/bin/sh` 已经是 **4.4BSD-Lite2 `usr/src/bin/sh`** 编译出来的
 i386 ELF（175 KB），不是项目早期的最小内置 sh；`-c`、交互、`echo`、
 算术展开 `$(( ))`、退出码传递都跑通。
+
+
+### S4 验收（`powershell -File tools\test_s4.ps1`）
+
+```
+atapi: QEMU     QEMU DVD-ROM
+atapi: capacity 2332 sectors
+root: ISO9660 on ATAPI CD, root dir lba 24, 2048 bytes
+
+bsd44> cd
+ISO9660 root: lba 24, 2048 bytes
+bsd44> usermode
+exec /sbin/init: entry 8048000 pd 200000
+init: starting /bin/sh
+execve /bin/sh: from ISO9660 (175504 bytes, lba 353)
+execve /bin/sh: entry 8048000 esp bfbfffb8 pd 239000 argc 3
+hello
+[user exit 3]
+```
+
+关键点：`/bin/sh` 不再来自内核数组，而是 **ISO9660 光盘上的 `/BIN/SH.ELF`**；
+`execve` 里打印的 `from ISO9660 (… lba 353)` 就是证据。VMware 里同样通过
+（`NECVMWar VMware IDE CDR10`）。
+
+### S4 实现要点
+
+- `kernel/atapi.c`：两条 IDE 通道 × 主/从 探测 ATAPI（IDENTIFY PACKET +
+  word0 判定 CD-ROM），用 SCSI READ(12) 走 PIO 读 2048 字节扇区；
+- `kernel/isofs.c`：读 LBA 16 的 PVD，校验 `CD001`，从 root 目录记录
+  逐扇区走目录项；路径按“大写 + 无扩展名补 `.ELF`”映射
+  （`/bin/sh` → `BIN/SH.ELF`，`/sbin/init` → `SBIN/INIT.ELF`）；
+- `usermode.c`：`execve` 优先从 ISO9660 读文件（读到 `CD_IMAGE_VA 0xFE400000`
+  的临时内核映射，按页 `pmap_map`），失败才回退到内嵌 ramfs；
+- `build_iso.ps1`：把 `sh.elf/init.elf/hello.elf/test.elf` 放进 ISO 的
+  `BIN/`、`SBIN/` 和根目录；内核里仍保留一份 ramfs 作为无盘启动的兜底；
+- monitor 新增 `cd` 命令查看挂载信息。
 
 ## 3. S3 做了什么
 
@@ -199,13 +236,22 @@ absent 是正常的。
     `0xe0` 位（`0xff` 或非 `0x60` 视为无串口）+ `kbd_init()` 清 8042 缓冲并
     发 `0xae`；启动时打印 `Console: ... COM1 present/absent` 便于确认。
 
-## 7. 下一步（S4）
+21. **ATAPI 的 PACKET 命令必须设置 byte count limit**（LBA mid/high，
+    小端）。填 0 时 VMware 的 CDR10 会把 READ(10)/READ(12) 直接 ABRT
+    （st 0x51 err 0x04），而 INQUIRY / READ CAPACITY 却正常，极具迷惑性。
+    正确做法：按本次数据相长度填 `bytes & 0xff` / `(bytes >> 8) & 0xff`。
+22. ATAPI 探测不要迷信 LBA mid/high 的 0x14/0xeb 签名（QEMU 读回 0），
+    用 IDENTIFY PACKET 返回的 word0（bit15=1 且设备类型 5 = CD-ROM）判定。
+23. 读 CD 的缓冲区不要放进内核静态数组：会撑大 ELF，stage1 把内核读到
+    0x10000、stage2 在 0x90000，>512 KB 的内核会被覆盖。改用运行时
+    `pmap_map` 的临时窗口。
 
-1. 真 root 文件系统：ATA/ATAPI + ISO9660（`isofs/cd9660`），把 `/bin/sh`
-   作为光盘文件加载，而不是内核数组；
-2. `fork/vfork` + `wait4`（先同步语义）→ 能让 sh 跑外部命令；
-3. 最小 tty：`/dev/console` + termios ioctl，让 `isatty`/行编辑成立；
-4. 目录支持：ramfs 目录项 + `getdirentries`，`opendir/readdir` 不再是 stub；
-5. 之后才是真 vnode/VFS 与 vm_map。
+## 7. 下一步（S4 之后）
+
+1. `fork/vfork` + `wait4`（先同步语义）→ sh 能跑外部命令（当前只有内建）；
+2. 最小 tty：`/dev/console` + termios ioctl，让 `isatty`/行编辑成立；
+3. 目录支持：`getdirentries` + `opendir/readdir`，`ls`/通配符可用；
+4. ISO9660 再补：多 extent 文件、Rock Ridge、路径大小写与符号链接；
+5. 之后才是真 vnode/VFS 与 vm_map（multi-extent 与缓存）。
 
 恢复方式：打开本文件，按第 5 节构建，从第 7 节继续。

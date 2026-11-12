@@ -20,6 +20,8 @@
 #include <machine/cpu.h>
 #include <machine/pmap.h>
 
+#include "isofs.h"
+
 extern vm_offset_t avail_start, avail_end, virtual_avail, virtual_end;
 extern int KPTphys;
 extern int Maxmem, physmem;
@@ -169,7 +171,7 @@ monitor(void)
 
 		if (!strcmp(line, "help"))
 			printf("help  mem  pte <addr>  map  banner  "
-			    "usermode  shell  test  reboot  halt\n");
+			    "usermode  shell  test  cd  reboot  halt\n");
 		else if (!strcmp(line, "mem"))
 			cmd_mem();
 		else if (!strncmp(line, "pte", 3))
@@ -178,6 +180,13 @@ monitor(void)
 			start_userland("echo hello; exit 3");
 		else if (!strcmp(line, "shell"))
 			start_userland(0);
+		else if (!strcmp(line, "cd")) {
+			if (iso_mounted())
+				printf("ISO9660 root: lba %d, %d bytes\n",
+				    iso_root(), iso_root_size());
+			else
+				printf("no ISO9660 root mounted\n");
+		}
 		else if (!strcmp(line, "test"))
 			start_prog("/test", 0);
 		else if (!strcmp(line, "map"))

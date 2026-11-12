@@ -132,16 +132,18 @@ VMware 提示：启动后先**点一下 VM 窗口**再敲键盘（VMware 需要�
 
 ## 边界说明
 
-这是一颗 **可启动的 4.4BSD-Lite2 i386 内核 + 最小用户态**：保护模式、
-分页、GDT/IDT/TSS、物理内存探测、Mach pmap 引导、可交互 monitor 均已跑通。
-S1–S3 之后 ISO 里已经带上 4.4BSD 的 `/sbin/init` 与**真正的 `/bin/sh`**
-（i386 静态 ELF），monitor 里 `usermode` 会执行
-`sh -c 'echo hello; exit 3'`，`shell` 进入交互 sh。
+这是一颗 **可启动的 4.4BSD-Lite2 i386 内核 + 最小用户态**：保护模式、分页、
+GDT/IDT/TSS、物理内存探测、Mach pmap 引导、可交互 monitor 均已跑通。
 
-它**还不是**完整系统：没有 `fork/wait`（外部命令不能执行）、没有 tty、
-没有 VFS/真 root 文件系统（rootfs 仍是内核数组，ISO9660 里没有
-`/bin/sh` 文件）。“ISO 内装 ELF 内核 + El Torito 引导、内核不是 PE”
-这一目标已达成，S3 的“在 ISO 里跑 BSD `/bin/sh`”也已达成。
+S1–S4 之后，ISO 的内核会自己用 ATAPI(PIO) 读光盘、挂上 **ISO9660 root**，
+`/sbin/init` 与**真正的 4.4BSD `/bin/sh`** 都是光盘上的文件（`/SBIN/INIT.ELF`、
+`/BIN/SH.ELF`），不再是内核数组；monitor 里 `usermode` 执行
+`sh -c 'echo hello; exit 3'`，`shell` 进入交互 sh，`cd` 显示挂载信息。
+
+它**还不是**完整系统：没有 `fork/wait`（外部命令不能执行）、没有 tty
+（无行编辑/作业控制）、没有真 vnode/VFS（root 是只读 ISO9660，ramfs 只作
+无盘兜底）。“ISO 内装 ELF 内核 + El Torito 引导、内核不是 PE”与
+“从光盘挂 root 跑 BSD `/bin/sh`”这两个目标都已达成。
 
 
 ## 许可
@@ -200,17 +202,22 @@ GCC 版本不必是 16.2.0：include 路径由 `gcc -print-file-name=include` �
 交叉工具链（或 i686-elf-gcc）并改写构建命令；COFF→PE→objcopy 的思路不变，
 `overlay/` 里的源码修补与引导器可以直接复用。
 
-## 用户态进度（S3）
+## 用户态进度（S4）
 
-- 已完成：用户页目录/栈、`execve`（含 argv/envp）、`int 0x80` 系统调用、
-  ramfs、`/sbin/init`、4.4BSD libc 子集、**真正的 4.4BSD `/bin/sh`**；
+- 已完成：ring3、用户页目录/栈、`execve`（含 argv/envp）、`int 0x80` 系统调用、
+  4.4BSD libc 子集、**真正的 4.4BSD `/bin/sh`**、**ATAPI + ISO9660 root**；
 - monitor 命令：
-  - `usermode` → `init -c 'echo hello; exit 3'`（S3 验收路径，退出码 3）；
+  - `usermode` → 从光盘加载 `init -c 'echo hello; exit 3'`（S3/S4 验收路径）；
   - `shell` → 交互 `/bin/sh`（内建命令、`$(( ))` 算术、退出码传递）；
   - `test` → libc 冒烟测试（printf/malloc/string）；
-- 仍然没有：`fork/wait`（所以跑不了外部命令）、tty/termios、VFS、
-  ISO9660 root。路线与验收标准见 [`bsd44/docs/USERLAND-PLAN.md`](bsd44/docs/USERLAND-PLAN.md)。
+  - `cd` → 打印 ISO9660 挂载信息（root 目录 LBA/大小）；
+- 启动日志会打印 `atapi: <设备型号>`、`atapi: capacity N sectors`、
+  `root: ISO9660 on ATAPI CD, root dir lba N, N bytes`；
+- 仍然没有：`fork/wait`（跑不了外部命令）、tty/termios、真 vnode/VFS
+  （ISO9660 只读、无目录遍历）。路线见
+  [`bsd44/docs/USERLAND-PLAN.md`](bsd44/docs/USERLAND-PLAN.md)。
 
 用户态程序用 `bsd44/build_userland.ps1`（小工具）与 `bsd44/build_sh.ps1`
-（libc + 4.4BSD sh）构建：COFF → PE(0x08048000) → `objcopy -O elf32-i386`，
-内核 loader 只接受静态 `ET_EXEC` ELF32，且用户态必须 `-march=i386 -mno-sse`。
+（libc + 4.4BSD sh）构建：COFF → PE(0x08048000) → `objcopy -O elf32-i386`；
+`build_iso.ps1` 再把它们放进 ISO 的 `/BIN`、`/SBIN`。用户态必须
+`-march=i386 -mno-sse`。

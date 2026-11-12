@@ -27,6 +27,9 @@
 #include <machine/cpu.h>
 #include <machine/pmap.h>
 
+#include "atapi.h"
+#include "isofs.h"
+
 #define	USER_LOAD	0x08048000
 #define	USER_STACK_TOP	0xBFC00000
 #define	USER_STACK_SIZE	0x8000
@@ -95,6 +98,34 @@ struct fd {
 
 static struct fd fds[NFD];
 static unsigned next_pa = 0x200000;
+static unsigned page_alloc(void);
+
+#define	CD_IMAGE_VA	0xFE400000	/* kernel window for a file read from CD */
+static unsigned cd_mapped;		/* bytes mapped at CD_IMAGE_VA */
+
+/*
+ * Map (lazily) a kernel window big enough for one image read from the
+ * ISO9660 root.  Physical pages come from the bump allocator, so they are
+ * contiguous, but we map them one page at a time.
+ */
+static unsigned char *
+cd_map(unsigned size)
+{
+	unsigned need = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	unsigned i;
+
+	if (need == 0 || need > 4 * 1024 * 1024)
+		return (0);
+	for (i = cd_mapped; i < need; i += PAGE_SIZE) {
+		unsigned pa = page_alloc();
+
+		pmap_map((vm_offset_t)(CD_IMAGE_VA + i), (vm_offset_t)pa,
+		    (vm_offset_t)pa + PAGE_SIZE,
+		    VM_PROT_READ | VM_PROT_WRITE);
+	}
+	cd_mapped = need;
+	return ((unsigned char *)CD_IMAGE_VA);
+}
 static unsigned brk_mapped = USER_HEAP_START;	/* next heap page to map */
 static unsigned umask_val = 022;
 
@@ -383,6 +414,8 @@ static int
 exec_image(const char *path, unsigned uargv, unsigned uenvp, struct sysregs *r)
 {
 	struct file *f;
+	const unsigned char *img;
+	unsigned len;
 	unsigned pd, entry, esp;
 	char *argv[MAXARG], *envp[MAXENV];
 	static char argbuf[1024];
@@ -390,9 +423,32 @@ exec_image(const char *path, unsigned uargv, unsigned uenvp, struct sysregs *r)
 	unsigned p, n;
 	char *b = argbuf;
 
-	f = fs_lookup(path);
-	if (f == 0)
-		return (-ENOENT);
+	/*
+	 * Prefer the ISO9660 root: S4 moved /sbin/init and /bin/sh onto the
+	 * CD.  The embedded ramfs images stay as a fallback for a kernel
+	 * booted without a disc.
+	 */
+	f = 0;
+	{
+		unsigned lba, fsize;
+		unsigned char *buf;
+
+		if (iso_mounted() &&
+		    iso_lookup(path, &lba, &fsize) == 0 &&
+		    (buf = cd_map(fsize)) != 0 &&
+		    atapi_read(lba, (fsize + 2047) / 2048, buf) == 0) {
+			img = buf;
+			len = fsize;
+			printf("execve %s: from ISO9660 (%d bytes, lba %d)\n",
+			    path, fsize, lba);
+		} else if ((f = fs_lookup(path)) != 0) {
+			img = f->f_data;
+			len = *f->f_len;
+			printf("execve %s: from ramfs (%d bytes)\n", path, len);
+		} else {
+			return (-ENOENT);
+		}
+	}
 
 	if (uargv != 0) {
 		while (argc < MAXARG && user_word(uargv, &p) == 0 && p != 0) {
@@ -406,8 +462,7 @@ exec_image(const char *path, unsigned uargv, unsigned uenvp, struct sysregs *r)
 	}
 	envp[envc++] = "PATH=/bin:/sbin";
 
-	pd = build_image(f->f_data, *f->f_len, &entry, argv, argc, envp, envc,
-	    &esp);
+	pd = build_image(img, len, &entry, argv, argc, envp, envc, &esp);
 	brk_mapped = USER_HEAP_START;
 	printf("execve %s: entry %x esp %x pd %x argc %d\n",
 	    path, entry, esp, pd, argc);
