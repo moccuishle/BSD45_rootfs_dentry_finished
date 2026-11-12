@@ -18,5 +18,17 @@ ethernet0.present = "FALSE"
 usb.present = "FALSE"
 sound.present = "FALSE"
 
+# The guest kernel has no USB stack: it polls the legacy 8042 keyboard
+# controller.  VMware 17 defaults to a virtual USB keyboard, which the
+# guest would never see, so force the PS/2 (i8042) keyboard/mouse.
+keyboard.vusb.enable = "FALSE"
+mouse.vusb.enable = "FALSE"
+keyboard.allowBothIRQs = "FALSE"
+
 bios.bootOrder = "cdrom"
 bios.hddOrder = ""
+
+# Uncomment to capture the serial console (useful when debugging boot):
+#serial0.present = "TRUE"
+#serial0.fileType = "file"
+#serial0.fileName = "serial.log"

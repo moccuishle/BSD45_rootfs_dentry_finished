@@ -12,3 +12,11 @@ reno-src-main.zip
 *.ppm
 *.log
 .tmp/
+
+# VMware runtime files
+bsd44/vms/*.scoreboard
+bsd44/vms/*.vmsd
+bsd44/vms/*.vmxf
+bsd44/vms/nvram
+bsd44/vms/*.lck/
+bsd44/vms/*.log
