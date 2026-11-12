@@ -33,13 +33,57 @@ u_short *Crtat = VGA_COLOR;
 static int	crt_row, crt_col;
 static u_short *crt_base;
 
+static int	com_present;	/* COM1 really exists (not an unassigned port) */
+
 static void	vga_cursor(void);
+
+/*
+ * Probe for a 16550-style UART.  On firmware that does not map COM1 (for
+ * example a VMware VM with no serial port configured) reads to 0x3f8..
+ * return 0xff, which would otherwise look like "LSR: data ready" and make
+ * cngetc() return 0xff forever, so the keyboard was never polled.
+ */
+static int
+com_probe(void)
+{
+	int lsr = inb(COM1_LSR);
+
+	if (lsr == 0xff)
+		return (0);
+	/* THRE and TEMT must both be set, bit 7 (a 16550 has 0 there) clear */
+	if ((lsr & 0xe0) != 0x60)
+		return (0);
+	return (1);
+}
+
+int
+pccom_present(void)
+{
+
+	return (com_present);
+}
+
+static void
+kbd_init(void)
+{
+	int i;
+
+	/* drain whatever the BIOS left in the 8042 output buffer */
+	for (i = 0; i < 32 && (inb(0x64) & 0x01); i++)
+		(void)inb(0x60);
+	/* wait for the input buffer to drain, then enable the keyboard */
+	for (i = 0; i < 100000 && (inb(0x64) & 0x02); i++)
+		;
+	outb(0x64, 0xae);
+}
 
 static int
 com_ready(void)
 {
 	int i;
 
+	if (!com_present)
+		return (0);
 	for (i = 0; i < 100000; i++)
 		if (inb(COM1_LSR) & 0x20)
 			return (1);
@@ -90,7 +134,10 @@ pccninit(struct consdev *cp)
 		crt_base[i] = (ATTR << 8) | ' ';
 	crt_row = crt_col = 0;
 	vga_cursor();
-	com_init();
+	com_present = com_probe();
+	if (com_present)
+		com_init();
+	kbd_init();
 	return (0);
 }
 
@@ -186,9 +233,8 @@ pccngetc(dev_t dev)
 	static const char *map;
 	int c;
 
-	if (inb(COM1_LSR) & 0x01) {
+	if (com_present && (inb(COM1_LSR) & 0x01))
 		return (inb(COM1));
-	}
 
 	if ((inb(0x64) & 0x01) == 0)
 		return (0);

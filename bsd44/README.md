@@ -125,6 +125,11 @@ trap、monitor、少量 stub。
 # VMware: File -> Open -> bsd44\vms\BSD44-ELF-x86.vmx
 ```
 
+VMware 提示：启动后先**点一下 VM 窗口**再敲键盘（VMware 需要捕获输入）。
+没有配置串口的 VM，启动行会显示 `Console: VGA 80x25, COM1 absent`，这是正常的；
+早期 ISO 在这种情况下键盘会失灵（VMware 未映射端口读回 `0xff`，被误判成串口有数据），
+现已修复并加了 `tools/test_kbd.ps1` 回归。
+
 ## 边界说明
 
 这是一颗 **可启动的 4.4BSD-Lite2 i386 内核 + 最小用户态**：保护模式、

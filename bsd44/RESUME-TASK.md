@@ -145,7 +145,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test_s3.ps1
 - `test`：libc 冒烟测试（printf/malloc/string）。
 
 `tools/run_qemu_test.ps1` 是 QEMU 驱动（TCP 串口，`server=on,wait=on`，
-必须 wait=on 才能收到启动输出）。
+必须 wait=on 才能收到启动输出）。`tools/test_kbd.ps1` 是**纯键盘**回归
+（`-serial none`，模拟 VMware 这种没有串口的机器）。
+
+### VMware
+
+打开 `vms\BSD44-ELF-x86.vmx`（cdrom 指向 `..\out\BSD44-ELF-x86.iso`）。
+启动后**先点一下 VM 窗口**再敲键盘（VMware 要捕获输入）。启动行会打印
+`Console: VGA 80x25, COM1 present` 或 `COM1 absent`——没有串口的 VM 显示
+absent 是正常的。
+
+> 旧版 ISO 在 VMware 里键盘没反应：VMware 对未映射的 I/O 端口返回 `0xff`，
+> 而 `pccngetc()` 先读 COM1 的 LSR，`0xff & 1 == 1` 被当成"串口有数据"，
+> 于是永远返回 `0xff`、从不轮询键盘。现在 `com_probe()` 会识别这种情况
+> 并跳过 COM1，另外 `kbd_init()` 会清空 8042 输出缓冲并发送 `0xae`
+> 使能键盘接口。想抓串口日志可在 vmx 里加：
+>
+> ```
+> serial0.present = "TRUE"
+> serial0.fileType = "file"
+> serial0.fileName = "bsd44-serial.log"
+> ```
 
 ## 6. 已踩过并修复的关键坑（别重犯）
 
@@ -174,6 +194,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test_s3.ps1
 18. 复制 sh 源码时源树里的 `obj` 坏符号链接会让 `Copy-Item` 管道中断，
     要过滤 ReparsePoint。
 19. `Expand-Archive` 解 Reno 源码会因非法文件名失败，用 `7za x`。
+20. **VMware 无串口时键盘失灵**：未映射 I/O 端口读回 `0xff`，`pccngetc()`
+    把 `0xff` 当串口数据，永远不读键盘。修复：`com_probe()` 判断 LSR 的
+    `0xe0` 位（`0xff` 或非 `0x60` 视为无串口）+ `kbd_init()` 清 8042 缓冲并
+    发 `0xae`；启动时打印 `Console: ... COM1 present/absent` 便于确认。
 
 ## 7. 下一步（S4）
 

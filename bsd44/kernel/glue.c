@@ -40,6 +40,7 @@ struct vmmeter	cnt;
 extern char	etext[], edata[], end[];
 
 void	monitor(void);
+int	pccom_present(void);
 void	reboot_now(void);
 
 /*
@@ -255,6 +256,8 @@ main(vm_offset_t firstaddr)
 	    kernel_pmap, kernel_pmap->pm_pdir, IdlePTD);
 	printf("VM: virtual_avail %x virtual_end %x\n",
 	    virtual_avail, virtual_end);
+	printf("Console: VGA 80x25, COM1 %s\n",
+	    pccom_present() ? "present" : "absent");
 	printf("\n");
 
 	monitor();
