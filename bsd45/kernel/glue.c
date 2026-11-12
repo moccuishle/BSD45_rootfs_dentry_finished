@@ -225,6 +225,7 @@ trap(struct trapframe *frame)
 	    frame->tf_esi, frame->tf_edi, frame->tf_ebp,
 	    frame->tf_ds, frame->tf_es);
 	printf("cr2=%x\n", rcr2());
+
 	printf("system halted.\n");
 	for (;;)
 		;

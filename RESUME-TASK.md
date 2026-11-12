@@ -171,6 +171,9 @@ hi-tty
 [user exit 0]
 ```
 
+VMware（`NECVMWar VMware IDE CDR10`）里同样能进 `# ` 交互，说明 tty 与
+ring3 入口都不依赖 QEMU。
+
 即：`isatty(0/1/2)` 全为真、`tcgetattr()` 返回规范模式的 termios
 （`ICANON|ECHO|ISIG|IEXTEN`），交互 `/bin/sh` 也终于打出 `# ` 提示符。
 
@@ -346,6 +349,12 @@ absent 是正常的。
     所以 tty 支持只要把 tcgetattr 接到 `TIOCGETA` 上即可。
 30. **sh 的提示符要 `-i`**：4.4BSD sh 不会因为 stdin 是 tty 就自动进入
     交互模式（要 `iflag`），init 里显式传 `-i` 才会打印 PS1。
+
+31. **切 CR3 之后不要再读内核数据**：`enter_user` 原来先 `mov cr3` 再
+    `pushl __ucodesel`（从内存取选择子），VMware 下新页目录对那页的映射
+    与 QEMU 不同，直接 #GP（被 4.4BSD 的向量表报成 TRAP 9）。现在改成
+    **先压好整个 ring3 返回帧、最后再切 CR3 + iret**；`resume_user` 同理，
+    它的 iret 帧全部从栈上取，不读内核全局。
 
 ## 7. 下一步（S6 之后）
 

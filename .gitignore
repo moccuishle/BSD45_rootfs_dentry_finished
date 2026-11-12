@@ -20,3 +20,8 @@ bsd45/vms/*.vmxf
 bsd45/vms/nvram
 bsd45/vms/*.lck/
 bsd45/vms/*.log
+bsd45/vms/*.vmem
+bsd45/vms/*.vmsn
+bsd45/vms/*.vmss
+bsd45/vms/*.vmdk
+bsd45/vms/*.lck
