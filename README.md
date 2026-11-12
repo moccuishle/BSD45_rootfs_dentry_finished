@@ -1,4 +1,4 @@
-# BSD4.4_rootfs_filesystem_x86_ISO_ELF_El-Torito
+# BSD45_rootfs_shell_finished
 
 用 **MSYS2 mingw32 的 i386 GCC**（`i686-w64-mingw32-gcc 16.2.0`）编译
 **4.4BSD-Lite2 `sys/i386`** 的机器相关核心，生成 **UNIX System V ELF32
@@ -11,10 +11,10 @@ ISO 里的内核是 **ELF**，不是 PE/EXE。
 
 | 文件 | 说明 |
 |---|---|
-| `BSD44-ELF-x86.iso` | 4.5 MB，VMware / QEMU 可直接从光盘启动 |
-| `BSD44.ELF` | 内核：`ELF32 EXEC, Intel 80386`，KERNBASE `0xFE000000`，无 SSE/MMX |
+| `BSD45-ELF-x86.iso` | 4.5 MB，VMware / QEMU 可直接从光盘启动 |
+| `BSD45.ELF` | 内核：`ELF32 EXEC, Intel 80386`，KERNBASE `0xFE000000`，无 SSE/MMX |
 | `screenshot.png` | QEMU 中 VGA 文本控制台实拍 |
-| `bsd44/` | 完整工程：构建脚本、引导器、内核 glue、文档、VMware vmx |
+| `bsd45/` | 完整工程：构建脚本、引导器、内核 glue、文档、VMware vmx |
 | `4.4BSD-Lite2.tar.gz` | 原始 4.4BSD-Lite2 源码（构建时自动解包） |
 
 启动后串口/VGA 输出：
@@ -27,10 +27,10 @@ pmap: kernel_pmap 0xfe047010 pdir 0xfe049000 IdlePTD 49000
 VM: virtual_avail fe0bd000 virtual_end ff7ff000
 
 BSD/386 monitor - type 'help' for commands
-bsd44> mem
+bsd45> mem
 Maxmem    16384 pages  (67108864K)
 ...
-bsd44> map
+bsd45> map
 mapped page at 0xfe0bd000
 pte new page: 100063
 readback 4f534442 444e4521
@@ -53,7 +53,7 @@ C:\Program Files\qemu\qemu-system-i386.exe
 ```
 
 ```powershell
-cd bsd44
+cd bsd45
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build_all.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\verify.ps1
 ```
@@ -113,16 +113,16 @@ trap、monitor、少量 stub。
 | `machdep.c` | `lgdt(&r_gdt); lidt(&r_idt);` | 本树 `lgdt` 只接受 `region_descriptor *` |
 | `segments.h` | `region_descriptor` 6 字节 packed；`segment_descriptor` 两个 32 位字 | GCC 16 的 16+24 位域跨 32 位单元，GDT 步长错 |
 
-详细清单与构建参数见 [`bsd44/README.md`](bsd44/README.md)。
+详细清单与构建参数见 [`bsd45/README.md`](bsd45/README.md)。
 
 ## 启动
 
 ```powershell
 # QEMU
 & "C:\Program Files\qemu\qemu-system-i386.exe" `
-  -cdrom BSD44-ELF-x86.iso -boot d -m 64 -serial stdio
+  -cdrom BSD45-ELF-x86.iso -boot d -m 64 -serial stdio
 
-# VMware: File -> Open -> bsd44\vms\BSD44-ELF-x86.vmx
+# VMware: File -> Open -> bsd45\vms\BSD45-ELF-x86.vmx
 ```
 
 VMware 提示：启动后先**点一下 VM 窗口**再敲键盘（VMware 需要捕获输入）。
@@ -140,7 +140,7 @@ S1–S5 之后，ISO 的内核会自己用 ATAPI(PIO) 读光盘、挂上 **ISO96
 `fork/vfork/wait4/exit` 与一个协程式调度器，所以 sh **能跑外部命令**：
 
 ```
-bsd44> shell
+bsd45> shell
 /bin/echo one
 one
 execve /bin/echo: from ISO9660 (70412 bytes, lba 239)
@@ -157,7 +157,7 @@ vnode/VFS（root 是只读 ISO9660 + ramfs 兜底）。
 
 ## 许可
 
-`4.4BSD-Lite2.tar.gz` 与 `bsd44/overlay/` 中的 4.4BSD 代码遵循其原始
+`4.4BSD-Lite2.tar.gz` 与 `bsd45/overlay/` 中的 4.4BSD 代码遵循其原始
 BSD 版权许可以及 UC Berkeley 的 advertising 条款；本项目新增的脚本、
 引导器与 glue 代码可视为同一 BSD 风格许可。
 
@@ -165,19 +165,19 @@ BSD 版权许可以及 UC Berkeley 的 advertising 条款；本项目新增的�
 
 ```bash
 # 防火墙可能会重置 HTTPS 大文件传输，用 SSH 更稳（本机已配置 key）
-git clone git@github.com:moccuishle/BSD4.4_rootfs_filesystem_x86_ISO_ELF_El-Torito-.git
-cd BSD4.4_rootfs_filesystem_x86_ISO_ELF_El-Torito-/bsd44
+git clone git@github.com:moccuishle/BSD45_rootfs_shell_finished.git
+cd BSD45_rootfs_shell_finished/bsd45
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build_all.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\verify.ps1
 ```
 
 仓库自带 `4.4BSD-Lite2.tar.gz`、`overlay/` 与全部脚本，构建时会自动解包并
-应用修补，不需要再找源码。产物 `BSD44-ELF-x86.iso` / `BSD44.ELF` 也已在
+应用修补，不需要再找源码。产物 `BSD45-ELF-x86.iso` / `BSD45.ELF` 也已在
 仓库根目录，即使不重新编译也能直接启动。
 
 ### 在另一台 Windows 电脑上
 
-脚本会自动查找工具链，不再依赖固定路径（`bsd44/tools-find.ps1`）：
+脚本会自动查找工具链，不再依赖固定路径（`bsd45/tools-find.ps1`）：
 
 | 工具 | 自动查找顺序 / 覆盖方式 |
 |---|---|
@@ -204,7 +204,7 @@ GCC 版本不必是 16.2.0：include 路径由 `gcc -print-file-name=include` �
 不过内核是 1994 年的 K&R 代码，更新的 GCC 可能引入新的诊断；仓库默认参数在
 **16.2.0** 上验证通过。
 
-**不装工具链也能用**：仓库里已有 `BSD44-ELF-x86.iso` 与 `BSD44.ELF`，
+**不装工具链也能用**：仓库里已有 `BSD45-ELF-x86.iso` 与 `BSD45.ELF`，
 另一台电脑只要装 VMware 或 QEMU 就能直接启动，不需要编译。
 
 **Linux / macOS**：这些 `.ps1` 脚本不适用。需要 `i686-w64-mingw32-*`
@@ -225,9 +225,9 @@ GCC 版本不必是 16.2.0：include 路径由 `gcc -print-file-name=include` �
   `root: ISO9660 on ATAPI CD, root dir lba N`；
 - 仍然没有：tty/termios、目录遍历、pipe、真 vnode/VFS；fork/exec 的物理页
   只分配不回收。路线见
-  [`bsd44/docs/USERLAND-PLAN.md`](bsd44/docs/USERLAND-PLAN.md)。
+  [`bsd45/docs/USERLAND-PLAN.md`](bsd45/docs/USERLAND-PLAN.md)。
 
-用户态程序用 `bsd44/build_userland.ps1`、`bsd44/build_sh.ps1`（libc + sh +
+用户态程序用 `bsd45/build_userland.ps1`、`bsd45/build_sh.ps1`（libc + sh +
 echo）构建：COFF → PE(0x08048000) → `objcopy -O elf32-i386`；
 `build_iso.ps1` 把 `BIN/SH.ELF`、`BIN/ECHO.ELF`、`SBIN/INIT.ELF`、`TEST.ELF`
 放进 ISO。用户态必须 `-march=i386 -mno-sse`。

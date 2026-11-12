@@ -1,5 +1,5 @@
 # build_sh.ps1 - build the 4.4BSD /bin/sh (and a libc smoke test) as a static
-# i386 ELF for BSD44-ELF-x86.
+# i386 ELF for BSD45-ELF-x86.
 #
 #	COFF objects -> PE (image base 0x08048000) -> objcopy -O elf32-i386
 #

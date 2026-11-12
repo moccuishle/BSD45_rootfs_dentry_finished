@@ -1,9 +1,9 @@
-# BSD44-ELF-x86 任务恢复文本
+# BSD45-ELF-x86 任务恢复文本
 
 更新时间：2026-11-13（Asia/Shanghai）
 状态：**S5 完成**（fork/vfork/wait4，sh 可跑外部命令）。
 下一步：tty/termios、目录支持、真 vnode/VFS。
-仓库：https://github.com/moccuishle/BSD4.4_rootfs_filesystem_x86_ISO_ELF_El-Torito-
+仓库：https://github.com/moccuishle/BSD45_rootfs_shell_finished
 
 本机环境（网吧 Windows，无管理员、防火墙不可关）：
 
@@ -46,7 +46,7 @@ ISO，最终 ISO 启动后进入用户态运行 BSD 的 `/bin/sh`。
 ### S3 验收（`powershell -File tools\test_s3.ps1`）
 
 ```
-bsd44> usermode
+bsd45> usermode
 exec /sbin/init: entry 8048000 pd 200000
 init: starting /bin/sh
 execve /bin/sh: entry 8048000 esp bfbfffb8 pd 20e000 argc 3
@@ -57,7 +57,7 @@ hello
 交互模式（monitor 输入 `shell`）：
 
 ```
-bsd44> shell
+bsd45> shell
 execve /bin/sh: entry 8048000 esp bfbfffd8 pd 20e000 argc 1
 echo hi there
 hi there
@@ -79,9 +79,9 @@ atapi: QEMU     QEMU DVD-ROM
 atapi: capacity 2332 sectors
 root: ISO9660 on ATAPI CD, root dir lba 24, 2048 bytes
 
-bsd44> cd
+bsd45> cd
 ISO9660 root: lba 24, 2048 bytes
-bsd44> usermode
+bsd45> usermode
 exec /sbin/init: entry 8048000 pd 200000
 init: starting /bin/sh
 execve /bin/sh: from ISO9660 (175504 bytes, lba 353)
@@ -111,7 +111,7 @@ hello
 ### S5 验收（`powershell -File tools\test_proc.ps1`）
 
 ```
-bsd44> test
+bsd45> test
 exec /test: from ISO9660 (70588 bytes)
 S:fork
 C:fork
@@ -128,7 +128,7 @@ done
 sh 里跑外部命令（fork → exec → wait4 全部走通，`$?` 正确）：
 
 ```
-bsd44> shell
+bsd45> shell
 execve /bin/sh: from ISO9660 (175504 bytes, lba 274)
 /bin/echo one
 execve /bin/echo: from ISO9660 (70412 bytes, lba 239)
@@ -207,7 +207,7 @@ FILE/缓冲/printf 家族）、`gen/`（isatty/setmode/wait3/exec）。
 ## 5. 构建 / 运行 / 测试
 
 ```powershell
-cd C:\Users\Administrator\Desktop\work\bsd44
+cd C:\Users\Administrator\Desktop\work\bsd45
 $env:QEMU='C:\msys64\ucrt64\bin\qemu-system-i386.exe'
 $env:MKISOFS='C:\Program Files (x86)\VMware\VMware Workstation\mkisofs.exe'
 
@@ -222,7 +222,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test_s3.ps1
 
 ```powershell
 & "C:\msys64\ucrt64\bin\qemu-system-i386.exe" `
-  -cdrom out\BSD44-ELF-x86.iso -boot d -m 64 -serial stdio
+  -cdrom out\BSD45-ELF-x86.iso -boot d -m 64 -serial stdio
 ```
 
 启动后在 monitor 里：
@@ -236,7 +236,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test_s3.ps1
 
 ### VMware
 
-打开 `vms\BSD44-ELF-x86.vmx`（cdrom 指向 `..\out\BSD44-ELF-x86.iso`）。
+打开 `vms\BSD45-ELF-x86.vmx`（cdrom 指向 `..\out\BSD45-ELF-x86.iso`）。
 启动后**先点一下 VM 窗口**再敲键盘（VMware 要捕获输入）。启动行会打印
 `Console: VGA 80x25, COM1 present` 或 `COM1 absent`——没有串口的 VM 显示
 absent 是正常的。
@@ -250,7 +250,7 @@ absent 是正常的。
 > ```
 > serial0.present = "TRUE"
 > serial0.fileType = "file"
-> serial0.fileName = "bsd44-serial.log"
+> serial0.fileName = "bsd45-serial.log"
 > ```
 
 ## 6. 已踩过并修复的关键坑（别重犯）

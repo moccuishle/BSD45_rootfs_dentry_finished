@@ -261,12 +261,12 @@ $textSym = "_etext=0x{0:x}" -f $textEnd
 & $LD @ldflags "--defsym", $endSym, "--defsym", $dataSym, "--defsym", $textSym -o "$bld\kernel.pe" @objs 2>&1 | Select-Object -First 40
 if ($LASTEXITCODE -ne 0) { Write-Host "link pass2 failed" -ForegroundColor Red; exit 1 }
 
-& $OC -O elf32-i386 -R .idata -R .reloc "$bld\kernel.pe" "$bld\bsd44.elf"
+& $OC -O elf32-i386 -R .idata -R .reloc "$bld\kernel.pe" "$bld\bsd45.elf"
 if ($LASTEXITCODE -ne 0) { Write-Host "objcopy failed" -ForegroundColor Red; exit 1 }
 
-Copy-Item "$bld\bsd44.elf" (Join-Path $ws "out\BSD44.ELF") -Force -ErrorAction SilentlyContinue
-Write-Host "built $bld\bsd44.elf"
-& $OD -h "$bld\bsd44.elf" | Select-Object -First 12
+Copy-Item "$bld\bsd45.elf" (Join-Path $ws "out\BSD45.ELF") -Force -ErrorAction SilentlyContinue
+Write-Host "built $bld\bsd45.elf"
+& $OD -h "$bld\bsd45.elf" | Select-Object -First 12
 
 
 

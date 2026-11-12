@@ -1,4 +1,4 @@
-# run_qemu_test.ps1 - drive the BSD44 ISO in QEMU through a TCP serial port.
+# run_qemu_test.ps1 - drive the BSD45 ISO in QEMU through a TCP serial port.
 #
 # QEMU exposes COM1 on 127.0.0.1:$SerialPort so that we can both read the
 # console and type commands without depending on stdio redirection.
@@ -15,7 +15,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ws = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-if (!$Iso) { $Iso = Join-Path $ws "out\BSD44-ELF-x86.iso" }
+if (!$Iso) { $Iso = Join-Path $ws "out\BSD45-ELF-x86.iso" }
 . (Join-Path $ws "tools-find.ps1")
 $qemu = Get-Qemu
 if (!$qemu) { throw "qemu-system-i386.exe not found (set QEMU env var)" }

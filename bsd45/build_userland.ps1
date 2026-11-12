@@ -1,4 +1,4 @@
-# build_userland.ps1 - build static i386 ELF user programs for BSD44-ELF-x86
+# build_userland.ps1 - build static i386 ELF user programs for BSD45-ELF-x86
 #
 # The mingw toolchain cannot emit ELF directly, so: COFF object ->
 # PE (image base 0x08048000) -> objcopy -O elf32-i386.  The kernel's

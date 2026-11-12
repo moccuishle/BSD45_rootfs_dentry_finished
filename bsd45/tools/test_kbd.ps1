@@ -10,7 +10,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ws = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-if (!$Iso) { $Iso = Join-Path $ws "out\BSD44-ELF-x86.iso" }
+if (!$Iso) { $Iso = Join-Path $ws "out\BSD45-ELF-x86.iso" }
 . (Join-Path $ws "tools-find.ps1")
 $qemu = Get-Qemu
 if (!$qemu) { throw "qemu-system-i386.exe not found" }

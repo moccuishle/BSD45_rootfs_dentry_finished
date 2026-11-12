@@ -1,4 +1,4 @@
-# build_iso.ps1 - build the El Torito boot image and the BSD44-ELF-x86 ISO
+# build_iso.ps1 - build the El Torito boot image and the BSD45-ELF-x86 ISO
 param(
     [string]$Kernel = "",
     [string]$OutIso = "",
@@ -15,8 +15,8 @@ $bin = Get-MingwBin
 $GCC = "$bin\gcc.exe"; $LD = "$bin\ld.exe"; $OC = "$bin\objcopy.exe"
 $MKISO = Get-Mkisofs
 $isodir = Join-Path $bld "isodir"
-if (!$Kernel) { $Kernel = Join-Path $bld "bsd44.elf" }
-if (!$OutIso) { $OutIso = Join-Path $out "BSD44-ELF-x86.iso" }
+if (!$Kernel) { $Kernel = Join-Path $bld "bsd45.elf" }
+if (!$OutIso) { $OutIso = Join-Path $out "BSD45-ELF-x86.iso" }
 New-Item -ItemType Directory -Force -Path $out, $isodir | Out-Null
 
 function Build-Stage([string]$src, [string]$text, [string]$name, [string]$entry = "_start") {
@@ -57,7 +57,7 @@ if ($off -lt 0) { throw "manifest magic not found" }
 [BitConverter]::GetBytes([uint32]$b2.Length).CopyTo($img, $off + 12)
 [IO.File]::WriteAllBytes("$bld\boot.img", $img)
 
-Copy-Item $Kernel "$isodir\BSD44.ELF" -Force
+Copy-Item $Kernel "$isodir\BSD45.ELF" -Force
 
 # S4: the userland programs live on the ISO9660 volume, not in the kernel.
 New-Item -ItemType Directory -Force -Path "$isodir\BIN", "$isodir\SBIN" | Out-Null
@@ -77,7 +77,7 @@ Copy-Item "$ws\README-ISO.txt" "$isodir\README.TXT" -Force -ErrorAction Silently
 if (Test-Path $OutIso) { Remove-Item $OutIso -Force }
 $mkArgs = @()
 if ([IO.Path]::GetFileNameWithoutExtension($MKISO) -eq "xorriso") { $mkArgs += @("-as", "mkisofs") }
-& $MKISO @mkArgs -quiet -iso-level 1 -V "BSD44_ELF_X86" -b boot.img -c boot.cat `
+& $MKISO @mkArgs -quiet -iso-level 1 -V "BSD45_ELF_X86" -b boot.img -c boot.cat `
     -no-emul-boot -boot-load-size 8 -o $OutIso $isodir
 if ($LASTEXITCODE) { throw "mkisofs failed" }
 

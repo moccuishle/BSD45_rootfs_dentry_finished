@@ -1,6 +1,6 @@
 # 用户态路线图：VFS / rootfs / init / execve / BSD sh
 
-目标不是“给内核加一个打印 hello 的 ring3 demo”，而是把 BSD44-ELF-x86 补成
+目标不是“给内核加一个打印 hello 的 ring3 demo”，而是把 BSD45-ELF-x86 补成
 能跑 4.4BSD 用户态的最小 Unix：**VFS + root 文件系统 + 进程/系统调用 +
 execve + libc + /bin/sh**，最终 ISO 里是可执行的 i386 ELF 用户程序。
 

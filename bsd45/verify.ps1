@@ -1,7 +1,7 @@
 # verify.ps1 - boot the ISO in QEMU, run monitor commands, check serial log
 $ErrorActionPreference = "Stop"
 $ws  = Split-Path -Parent $MyInvocation.MyCommand.Path
-$iso = Join-Path $ws "out\BSD44-ELF-x86.iso"
+$iso = Join-Path $ws "out\BSD45-ELF-x86.iso"
 $log = Join-Path $ws "build\verify-serial.log"
 . (Join-Path $ws "tools-find.ps1")
 $qemu = Get-Qemu
