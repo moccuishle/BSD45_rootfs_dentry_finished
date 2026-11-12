@@ -1,8 +1,8 @@
 # BSD44-ELF-x86 任务恢复文本
 
 更新时间：2026-11-13（Asia/Shanghai）
-状态：**S4 核心完成**（ATAPI + ISO9660 root，sh/init 从光盘加载）。
-下一步：fork/wait、tty、真 vnode/VFS。
+状态：**S5 完成**（fork/vfork/wait4，sh 可跑外部命令）。
+下一步：tty/termios、目录支持、真 vnode/VFS。
 仓库：https://github.com/moccuishle/BSD4.4_rootfs_filesystem_x86_ISO_ELF_El-Torito-
 
 本机环境（网吧 Windows，无管理员、防火墙不可关）：
@@ -41,6 +41,7 @@ ISO，最终 ISO 启动后进入用户态运行 BSD 的 `/bin/sh`。
 | S2 | ramfs、fd 表、`execve`（含 argv/envp）、`/sbin/init` → `/bin/sh` | ✅ |
 | S3 | 4.4BSD libc 子集 + **真正的 BSD `/bin/sh`** | ✅ 本次完成 |
 | S4 | ATAPI(PIO) + ISO9660 只读 root；`/sbin/init`、`/bin/sh` 是光盘文件 | ✅ 本次完成（核心） |
+| S5 | fork/vfork/wait4、进程表与调度、`/bin/echo` 外部命令 | ✅ 本次完成 |
 
 ### S3 验收（`powershell -File tools\test_s3.ps1`）
 
@@ -105,6 +106,54 @@ hello
 - `build_iso.ps1`：把 `sh.elf/init.elf/hello.elf/test.elf` 放进 ISO 的
   `BIN/`、`SBIN/` 和根目录；内核里仍保留一份 ramfs 作为无盘启动的兜底；
 - monitor 新增 `cd` 命令查看挂载信息。
+
+
+### S5 验收（`powershell -File tools\test_proc.ps1`）
+
+```
+bsd44> test
+exec /test: from ISO9660 (70588 bytes)
+S:fork
+C:fork
+fork waited pid=2 code=5
+S:vfork
+execve /bin/echo: from ISO9660 (70412 bytes, lba 239)
+vfork-exec-ok
+P:vfork
+vfork waited pid=3 code=0
+done
+[user exit 0]
+```
+
+sh 里跑外部命令（fork → exec → wait4 全部走通，`$?` 正确）：
+
+```
+bsd44> shell
+execve /bin/sh: from ISO9660 (175504 bytes, lba 274)
+/bin/echo one
+execve /bin/echo: from ISO9660 (70412 bytes, lba 239)
+one
+/bin/echo two
+two
+echo st=$?
+st=0
+exit 0
+[user exit 0]
+```
+
+### S5 实现要点
+
+- `struct uproc` 进程表（8 槽）：pid/ppid、页目录、`brk` 水位、fd 表、
+  保存的 `sysregs` 上下文、退出码、等待状态；
+- `copy_address_space()`：新建 PD/PT，逐页复制用户地址空间（内核高半区共享）；
+- `resume_user(pd, sysregs *)`（`usermode_asm.s`）：换 CR3、恢复通用寄存器、
+  `iret` 回 ring3。系统调用栈是协程式复用的（每次 `int 0x80` 从 TSS esp0
+  重新开始），不用保存内核栈；
+- `fork` 复制地址空间、子进程 `eax=0`；`wait4` 若无僵尸子进程则阻塞父进程，
+  子进程 `exit` 时写回状态并唤醒父进程（`reaped` 标记：被唤醒的父进程直接
+  收走僵尸）；`vfork` = 复制地址空间 + 父进程阻塞到子进程 exec/exit；
+- `getpid/getppid/kill` 按进程表返回；`stat/access` 现在也会查 ISO9660，
+  这样 sh 的 `PATH` 查找能找到 `/bin/echo`。
 
 ## 3. S3 做了什么
 
@@ -246,12 +295,26 @@ absent 是正常的。
     0x10000、stage2 在 0x90000，>512 KB 的内核会被覆盖。改用运行时
     `pmap_map` 的临时窗口。
 
-## 7. 下一步（S4 之后）
+24. **`user_map()` 必须显式接收页目录**：它内部用 `SCRATCH_PD` 编辑页表，
+    fork/exec 之后 `SCRATCH_PD` 指向的可能已经是子进程的 PD，父进程 `brk`
+    会把页表改到别处（症状：父进程堆页缺失、`#PF`）。
+25. **内核镜像必须 < 512 KB**：stage1 把内核读到 `0x10000`，stage2 放在
+    `0x90000`；内核超过 512 KB 会覆盖自己的尾部（内嵌镜像数组），表现为
+    用户程序某几页是内核代码。S5 起 sh/echo/test 只放在 ISO9660 上，
+    内核只嵌 `hello/init`，镜像回到 ~334 KB。
+26. **僵尸进程要回收**：父进程阻塞在 `wait4` 时由子进程 `exit` 唤醒，这条
+    路径必须把子进程标成 FREE（`reaped`），否则下一次 `wait4` 会拿到已经
+    报过到旧 pid。
+27. **vfork 子进程不要碰栈**：严格共享地址空间时，子进程自己的函数调用会
+    踩父进程的栈帧（我们的测试程序就踩过）。本实现改为“复制 + 父进程阻塞”，
+    是 vfork 的安全超集。
 
-1. `fork/vfork` + `wait4`（先同步语义）→ sh 能跑外部命令（当前只有内建）；
-2. 最小 tty：`/dev/console` + termios ioctl，让 `isatty`/行编辑成立；
-3. 目录支持：`getdirentries` + `opendir/readdir`，`ls`/通配符可用；
-4. ISO9660 再补：多 extent 文件、Rock Ridge、路径大小写与符号链接；
-5. 之后才是真 vnode/VFS 与 vm_map（multi-extent 与缓存）。
+## 7. 下一步（S5 之后）
+
+1. tty/termios：`/dev/console` + `isatty` 为真，行编辑与作业控制；
+2. 目录：`getdirentries` + `opendir/readdir`，让 `ls`/通配符可用；
+3. pipe + `dup2`：`|` 与重定向（目前 `dup2` 有、`pipe` 返回 ENOSYS）；
+4. 真 vnode/VFS 与 vm_map，替换现在的 ramfs 数组 + ISO9660 特判；
+5. 简单文件系统缓存与页回收（现在 fork/exec 的页只分配不回收）。
 
 恢复方式：打开本文件，按第 5 节构建，从第 7 节继续。

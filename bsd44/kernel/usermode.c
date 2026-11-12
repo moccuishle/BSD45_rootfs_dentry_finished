@@ -64,10 +64,11 @@
 #define	EMFILE		24
 #define	ENOTTY		25
 #define	EROFS		30
+#define	EAGAIN		35
 #define	ENOSYS		78
 
-extern const unsigned char hello_elf[], init_elf[], sh_elf[], test_elf[];
-extern const unsigned int hello_elf_len, init_elf_len, sh_elf_len, test_elf_len;
+extern const unsigned char hello_elf[], init_elf[];
+extern const unsigned int hello_elf_len, init_elf_len;
 extern int _ucodesel, _udatasel;
 extern void enter_user(unsigned pd, unsigned entry, unsigned esp);
 extern void syscall_entry(void);
@@ -82,9 +83,7 @@ struct file {
 
 static struct file ramfs[] = {
 	{ "/sbin/init",	init_elf,	&init_elf_len },
-	{ "/bin/sh",	sh_elf,		&sh_elf_len },
 	{ "/hello",	hello_elf,	&hello_elf_len },
-	{ "/test",	test_elf,	&test_elf_len },
 	{ "/etc/profile", 0, 0 },
 	{ 0, 0, 0 }
 };
@@ -96,7 +95,37 @@ struct fd {
 	int			used;
 };
 
-static struct fd fds[NFD];
+/* saved user context, filled by syscall_entry/enter_user */
+struct sysregs {
+	unsigned ds, es, edi, esi, ebp, esp, ebx, edx, ecx, eax;
+	unsigned eip, cs, eflags, uesp, ss;
+};
+
+#define	NPROC		8
+#define	P_FREE		0
+#define	P_RUN		1
+#define	P_BLOCKED	2
+#define	P_ZOMBIE	3
+
+struct uproc {
+	int		state;
+	int		pid;		/* 1 = init */
+	int		ppid;
+	unsigned	pd;		/* page directory */
+	unsigned	brk_mapped;	/* next heap page to map */
+	struct fd	fds[NFD];
+	struct sysregs	regs;		/* context to resume */
+	int		exitcode;
+	int		wait_pid;	/* pid being waited for (0 = any) */
+	unsigned	wait_status;	/* user status pointer for wait4 */
+	int		vfork_wait;	/* blocked in vfork() */
+	int		vfork_child;	/* shares the parent's address space */
+};
+
+static struct uproc	procs[NPROC];
+static struct uproc	*cur;		/* current process */
+static int		next_pid = 2;
+
 static unsigned next_pa = 0x200000;
 static unsigned page_alloc(void);
 
@@ -126,7 +155,6 @@ cd_map(unsigned size)
 	cd_mapped = need;
 	return ((unsigned char *)CD_IMAGE_VA);
 }
-static unsigned brk_mapped = USER_HEAP_START;	/* next heap page to map */
 static unsigned umask_val = 022;
 
 static unsigned
@@ -174,11 +202,16 @@ user_pd_create(void)
 	return (pdpa);
 }
 
+/*
+ * Map one user page in a *specific* page directory.  The caller passes the
+ * directory because after a fork/exec SCRATCH_PD no longer points at the
+ * process we are editing (that bug silently unmapped the parent's heap).
+ */
 static void
-user_map(unsigned va, unsigned pa)
+user_map(unsigned pdpa, unsigned va, unsigned pa)
 {
 	unsigned pdi = va >> 22, pti = (va >> 12) & 0x3ff;
-	unsigned *pd = (unsigned *)SCRATCH_PD;
+	unsigned *pd = map_page(SCRATCH_PD, pdpa);
 	unsigned *pt;
 	unsigned ptpa;
 	int i;
@@ -229,7 +262,7 @@ load_elf(unsigned pdpa, const unsigned char *img, unsigned len, unsigned *entry)
 					c = chunk;
 				bcopy(img + off + n, dst, c);
 			}
-			user_map(vaddr + n, pa);
+			user_map(pdpa, vaddr + n, pa);
 		}
 	}
 }
@@ -243,7 +276,7 @@ map_stack(unsigned pdpa)
 	    va += PAGE_SIZE) {
 		pa = page_alloc();
 		zero_page(pa);
-		user_map(va, pa);
+		user_map(pdpa, va, pa);
 	}
 }
 
@@ -252,7 +285,7 @@ map_stack(unsigned pdpa)
  * Returns the user ESP to start with.
  */
 static unsigned
-build_args(char **argv, int argc, char **envp, int envc)
+build_args(unsigned pdpa, char **argv, int argc, char **envp, int envc)
 {
 	unsigned pa = page_alloc();
 	char *pg;
@@ -292,7 +325,7 @@ build_args(char **argv, int argc, char **envp, int envc)
 	esp -= 4;
 	*(unsigned *)(pg + (esp - USER_ARG_PAGE)) = argc;
 
-	user_map(USER_ARG_PAGE, pa);
+	user_map(pdpa, USER_ARG_PAGE, pa);
 	return (esp);
 }
 
@@ -304,7 +337,7 @@ build_image(const unsigned char *img, unsigned len, unsigned *entry,
 
 	load_elf(pd, img, len, entry);
 	map_stack(pd);
-	*uesp = build_args(argv, argc, envp, envc);
+	*uesp = build_args(pd, argv, argc, envp, envc);
 	return (pd);
 }
 
@@ -348,28 +381,280 @@ fs_lookup(const char *name)
 }
 
 static int
+isofile_exists(const char *path)
+{
+	unsigned lba, size;
+
+	return (iso_mounted() && iso_lookup(path, &lba, &size) == 0);
+}
+
+static int
 fd_alloc(struct file *f)
 {
 	int i;
 
 	for (i = 3; i < NFD; i++) {
-		if (!fds[i].used) {
-			fds[i].used = 1;
-			fds[i].d = f->f_data;
-			fds[i].len = *f->f_len;
-			fds[i].off = 0;
+		if (!cur->fds[i].used) {
+			cur->fds[i].used = 1;
+			cur->fds[i].d = f->f_data;
+			cur->fds[i].len = *f->f_len;
+			cur->fds[i].off = 0;
 			return (i);
 		}
 	}
 	return (-1);
 }
 
-/* --------------------------------------------------------------- syscalls */
+/* --------------------------------------------------------------- process */
 
-struct sysregs {
-	unsigned ds, es, edi, esi, ebp, esp, ebx, edx, ecx, eax;
-	unsigned eip, cs, eflags, uesp, ss;
-};
+static int user_ok(unsigned p, unsigned len);
+extern void resume_user(unsigned pd, struct sysregs *r);
+
+#define	SCRATCH2_PD	0xFE203000
+#define	SCRATCH2_PT	0xFE204000
+#define	SCRATCH2_PAGE	0xFE205000
+
+/*
+ * Deep copy of a user address space: new page directory, new page tables
+ * and new pages with the same contents.  The kernel's high mappings are
+ * shared, as usual.
+ */
+static unsigned
+copy_address_space(unsigned srcpd)
+{
+	unsigned dstpd = user_pd_create();
+	unsigned *spd = map_page(SCRATCH_PD, srcpd);
+	unsigned *dpd = map_page(SCRATCH2_PD, dstpd);
+	int i, j;
+
+	for (i = 0; i < 0x3f6; i++) {
+		unsigned *spt, *dpt;
+		unsigned dptpa;
+
+		if ((spd[i] & PG_V) == 0)
+			continue;
+		dptpa = page_alloc();
+		spt = map_page(SCRATCH_PT, spd[i] & PG_FRAME);
+		dpt = map_page(SCRATCH2_PT, dptpa);
+		for (j = 0; j < PAGE_SIZE / 4; j++)
+			dpt[j] = 0;
+		for (j = 0; j < PAGE_SIZE / 4; j++) {
+			unsigned spa, dpa;
+			char *s, *d;
+
+			if ((spt[j] & PG_V) == 0)
+				continue;
+			spa = spt[j] & PG_FRAME;
+			dpa = page_alloc();
+			s = map_page(SCRATCH_PAGE, spa);
+			d = map_page(SCRATCH2_PAGE, dpa);
+			bcopy(s, d, PAGE_SIZE);
+			dpt[j] = dpa | (spt[j] & 0xfff);
+		}
+		dpd[i] = dptpa | (spd[i] & 0xfff);
+	}
+	return (dstpd);
+}
+
+static struct uproc *
+proc_alloc(void)
+{
+	int i;
+
+	for (i = 0; i < NPROC; i++)
+		if (procs[i].state == P_FREE) {
+			bzero(&procs[i], sizeof(procs[i]));
+			return (&procs[i]);
+		}
+	return (0);
+}
+
+static struct uproc *
+proc_find(int pid)
+{
+	int i;
+
+	for (i = 0; i < NPROC; i++)
+		if (procs[i].state != P_FREE && procs[i].pid == pid)
+			return (&procs[i]);
+	return (0);
+}
+
+static int
+proc_children(int pid)
+{
+	int i, n = 0;
+
+	for (i = 0; i < NPROC; i++)
+		if (procs[i].state != P_FREE && procs[i].ppid == pid)
+			n++;
+	return (n);
+}
+
+/*
+ * Pick the next runnable process and return to user mode.
+ * Never returns.
+ */
+static void
+proc_sched(void)
+{
+	struct uproc *me = cur;
+	int i;
+
+	for (i = 0; i < NPROC; i++) {
+		struct uproc *p = &procs[i];
+
+		if (p->state == P_RUN && p != me) {
+			cur = p;
+			resume_user(p->pd, &p->regs);
+		}
+	}
+	if (me->state == P_RUN) {
+		cur = me;
+		resume_user(me->pd, &me->regs);
+	}
+	printf("\n[no runnable process]\n");
+	for (;;)
+		__asm__ volatile("cli; hlt");
+}
+
+static int
+do_fork(struct sysregs *r)
+{
+	struct uproc *p;
+	unsigned pd;
+
+	if ((p = proc_alloc()) == 0)
+		return (-EAGAIN);
+	pd = copy_address_space(cur->pd);
+	if (pd == 0) {
+		p->state = P_FREE;
+		return (-ENOMEM);
+	}
+	p->state = P_RUN;
+	p->pid = next_pid++;
+	p->ppid = cur->pid;
+	p->pd = pd;
+	p->brk_mapped = cur->brk_mapped;
+	bcopy(cur->fds, p->fds, sizeof(p->fds));
+	p->regs = *r;
+	p->regs.eax = 0;		/* the child returns 0 from fork() */
+
+	return (p->pid);
+}
+
+static int
+do_vfork(struct sysregs *r)
+{
+	struct uproc *p;
+	unsigned pd;
+
+	if ((p = proc_alloc()) == 0)
+		return (-EAGAIN);
+	/*
+	 * A strict vfork shares the address space, but our userland has no
+	 * way to protect the parent's stack frame while the child runs (the
+	 * child's own libc calls would clobber it).  A private copy plus the
+	 * "parent waits for exec/exit" rule is a safe superset.
+	 */
+	pd = copy_address_space(cur->pd);
+	if (pd == 0) {
+		p->state = P_FREE;
+		return (-ENOMEM);
+	}
+	p->state = P_RUN;
+	p->pid = next_pid++;
+	p->ppid = cur->pid;
+	p->pd = pd;
+	p->brk_mapped = cur->brk_mapped;
+	bcopy(cur->fds, p->fds, sizeof(p->fds));
+	p->regs = *r;
+	p->regs.eax = 0;
+	p->vfork_child = 1;
+
+	/* the parent blocks until the child execs or exits */
+	cur->regs = *r;
+	cur->state = P_BLOCKED;
+	cur->vfork_wait = 1;
+	proc_sched();
+	return (0);
+}
+
+static void
+proc_exit(int code)
+{
+	struct uproc *p;
+	int i, reaped = 0;
+
+	for (i = 0; i < NPROC; i++) {
+		p = &procs[i];
+		if (p->state != P_BLOCKED || p->pid != cur->ppid)
+			continue;
+		if (p->vfork_wait) {
+			p->vfork_wait = 0;
+			p->regs.eax = cur->pid;
+			p->state = P_RUN;
+			continue;
+		}
+		if (p->wait_pid != 0 && p->wait_pid != cur->pid)
+			continue;
+		if (p->wait_status != 0 && user_ok(p->wait_status, 4)) {
+			unsigned save = cur->pd;
+
+			__asm__ volatile("movl %0,%%cr3"
+			    :: "r"(p->pd) : "memory");
+			*(int *)p->wait_status = (code & 0xff) << 8;
+			__asm__ volatile("movl %0,%%cr3"
+			    :: "r"(save) : "memory");
+		}
+		p->regs.eax = cur->pid;
+		p->state = P_RUN;
+		reaped = 1;		/* the parent's wait4 gets the status */
+	}
+
+	cur->exitcode = code;
+	cur->state = reaped ? P_FREE : P_ZOMBIE;
+	if (cur->ppid == 0) {
+		printf("\n[user exit %d]\n", code);
+		for (;;)
+			__asm__ volatile("cli; hlt");
+	}
+	proc_sched();
+}
+
+static int
+do_wait4(int want, unsigned statusp, struct sysregs *r)
+{
+	struct uproc *p;
+	int i, pid;
+
+	for (i = 0; i < NPROC; i++) {
+		p = &procs[i];
+		if (p->state != P_ZOMBIE || p->ppid != cur->pid)
+			continue;
+		if (want > 0 && p->pid != want)
+			continue;
+		pid = p->pid;
+		if (statusp != 0 && user_ok(statusp, 4))
+			*(int *)statusp = (p->exitcode & 0xff) << 8;
+		p->state = P_FREE;
+		r->eax = pid;
+		return (0);
+	}
+	if (proc_children(cur->pid) == 0) {
+		r->eax = (unsigned)-ECHILD;
+		return (0);
+	}
+	cur->regs = *r;
+	cur->wait_pid = (want > 0) ? want : 0;
+	cur->wait_status = statusp;
+	cur->state = P_BLOCKED;
+	proc_sched();
+	r->eax = 0;
+	return (0);
+}
+
+/* --------------------------------------------------------------- syscalls */
 
 static int
 user_ok(unsigned p, unsigned len)
@@ -463,13 +748,28 @@ exec_image(const char *path, unsigned uargv, unsigned uenvp, struct sysregs *r)
 	envp[envc++] = "PATH=/bin:/sbin";
 
 	pd = build_image(img, len, &entry, argv, argc, envp, envc, &esp);
-	brk_mapped = USER_HEAP_START;
+	cur->pd = pd;
+	cur->brk_mapped = USER_HEAP_START;
 	printf("execve %s: entry %x esp %x pd %x argc %d\n",
 	    path, entry, esp, pd, argc);
 	__asm__ volatile("movl %0, %%cr3" :: "r"(pd) : "memory");
 	r->eip = entry;
 	r->uesp = esp;
 	r->eax = 0;
+	if (cur->vfork_child) {
+		struct uproc *pp = proc_find(cur->ppid);
+
+		cur->vfork_child = 0;
+		if (pp != 0 && pp->state == P_BLOCKED && pp->vfork_wait) {
+			pp->vfork_wait = 0;
+			pp->regs.eax = cur->pid;
+			pp->state = P_RUN;
+			cur->regs = *r;
+			cur->state = P_RUN;
+			cur = pp;
+			resume_user(pp->pd, &pp->regs);
+		}
+	}
 	return (0);
 }
 
@@ -526,12 +826,12 @@ syscall_dispatch(struct sysregs *r)
 			r->eax = i;
 			break;
 		}
-		if (fd >= NFD || !fds[fd].used) {
+		if (fd >= NFD || !cur->fds[fd].used) {
 			r->eax = (unsigned)-EBADF;
 			break;
 		}
-		while (i < len && fds[fd].off < fds[fd].len)
-			((char *)buf)[i++] = fds[fd].d[fds[fd].off++];
+		while (i < len && cur->fds[fd].off < cur->fds[fd].len)
+			((char *)buf)[i++] = cur->fds[fd].d[cur->fds[fd].off++];
 		r->eax = i;
 		break;
 	}
@@ -555,7 +855,7 @@ syscall_dispatch(struct sysregs *r)
 	}
 	case 6:				/* close(fd) */
 		if (r->ebx < NFD)
-			fds[r->ebx].used = 0;
+			cur->fds[r->ebx].used = 0;
 		r->eax = 0;
 		break;
 	case 59: {			/* execve(path, argv, envp) */
@@ -571,9 +871,8 @@ syscall_dispatch(struct sysregs *r)
 		break;
 	}
 	case 1:				/* exit(code) */
-		printf("\n[user exit %d]\n", r->ebx);
-		for (;;)
-			__asm__ volatile("cli; hlt");
+		proc_exit((int)r->ebx);
+		break;
 	case 17: {			/* break(addr) */
 		unsigned a = r->ebx;
 
@@ -581,19 +880,18 @@ syscall_dispatch(struct sysregs *r)
 			r->eax = (unsigned)-EINVAL;
 			break;
 		}
-		while (brk_mapped < a) {
-			user_map(brk_mapped, page_alloc());
-			brk_mapped += PAGE_SIZE;
+		while (cur->brk_mapped < a) {
+			user_map(cur->pd, cur->brk_mapped, page_alloc());
+			cur->brk_mapped += PAGE_SIZE;
 		}
-
 		r->eax = a;
 		break;
 	}
 	case 20:			/* getpid */
-		r->eax = 1;
+		r->eax = cur->pid;
 		break;
 	case 39:			/* getppid */
-		r->eax = 0;
+		r->eax = cur->ppid;
 		break;
 	case 24: case 25: case 43: case 47:	/* uid/gid */
 		r->eax = 0;
@@ -611,14 +909,20 @@ syscall_dispatch(struct sysregs *r)
 			r->eax = (unsigned)-EFAULT;
 			break;
 		}
-		r->eax = fs_lookup(path) ? 0 : (unsigned)-ENOENT;
+		if (fs_lookup(path) != 0 || isofile_exists(path))
+			r->eax = 0;
+		else
+			r->eax = (unsigned)-ENOENT;
 		break;
 	}
 	case 46: case 48: case 52: case 53:	/* signals: accept and ignore */
 		r->eax = 0;
 		break;
-	case 37:			/* kill */
-		r->eax = 0;
+	case 37:			/* kill(pid, sig) */
+		if (r->ecx == 0)
+			r->eax = proc_find((int)r->ebx) ? 0 : (unsigned)-ESRCH;
+		else
+			r->eax = 0;
 		break;
 	case 54:			/* ioctl */
 		r->eax = (unsigned)-ENOTTY;
@@ -636,10 +940,16 @@ syscall_dispatch(struct sysregs *r)
 	case 189: {			/* stat(path, sb) */
 		char path[128];
 		struct file *f;
+		unsigned lba, size;
 
 		if (user_str(r->ebx, path, sizeof(path)) < 0 ||
 		    !user_ok(r->ecx, STAT_SIZE)) {
 			r->eax = (unsigned)-EFAULT;
+			break;
+		}
+		if (iso_mounted() && iso_lookup(path, &lba, &size) == 0) {
+			fill_stat(0100755, size, (unsigned *)r->ecx);
+			r->eax = 0;
 			break;
 		}
 		f = fs_lookup(path);
@@ -661,38 +971,41 @@ syscall_dispatch(struct sysregs *r)
 			r->eax = 0;
 			break;
 		}
-		if (r->ebx >= NFD || !fds[r->ebx].used) {
+		if (r->ebx >= NFD || !cur->fds[r->ebx].used) {
 			r->eax = (unsigned)-EBADF;
 			break;
 		}
-		fill_stat(0100755, fds[r->ebx].len, (unsigned *)r->ecx);
+		fill_stat(0100755, cur->fds[r->ebx].len, (unsigned *)r->ecx);
 		r->eax = 0;
 		break;
 	}
 	case 199: {			/* lseek(fd, off, whence) */
 		unsigned fd = r->ebx, off = r->ecx, wh = r->edx;
 
-		if (fd >= NFD || !fds[fd].used) {
+		if (fd >= NFD || !cur->fds[fd].used) {
 			r->eax = (unsigned)-EBADF;
 			break;
 		}
 		if (wh == 0)
-			fds[fd].off = off;
+			cur->fds[fd].off = off;
 		else if (wh == 1)
-			fds[fd].off += off;
+			cur->fds[fd].off += off;
 		else
-			fds[fd].off = fds[fd].len;
-		r->eax = fds[fd].off;
+			cur->fds[fd].off = cur->fds[fd].len;
+		r->eax = cur->fds[fd].off;
 		break;
 	}
 	case 89:			/* getdtablesize */
 		r->eax = NFD;
 		break;
-	case 7:				/* wait4 */
-		r->eax = (unsigned)-ECHILD;
+	case 7:				/* wait4(pid, status, options, rusage) */
+		do_wait4((int)r->ebx, r->ecx, r);
 		break;
-	case 2: case 66:		/* fork / vfork */
-		r->eax = (unsigned)-ENOSYS;
+	case 2:				/* fork */
+		r->eax = (unsigned)do_fork(r);
+		break;
+	case 66:			/* vfork */
+		r->eax = (unsigned)do_vfork(r);
 		break;
 	case 41:			/* dup */
 		r->eax = (unsigned)-ENOSYS;
@@ -702,7 +1015,7 @@ syscall_dispatch(struct sysregs *r)
 		break;
 	case 90: {			/* dup2(from, to) */
 		if (r->ecx < NFD && (int)r->ebx >= 0 && r->ebx < NFD) {
-			fds[r->ecx] = fds[r->ebx];
+			cur->fds[r->ecx] = cur->fds[r->ebx];
 			r->eax = r->ecx;
 		} else {
 			r->eax = (unsigned)-EBADF;
@@ -732,15 +1045,33 @@ void
 start_prog(const char *path, const char *script)
 {
 	struct file *f;
+	const unsigned char *img;
+	unsigned len;
 	unsigned pd, entry, esp;
 	char *argv[4];
 	int argc;
 	char *envp[2];
 
-	f = fs_lookup(path);
-	if (f == 0) {
-		printf("ramfs: no %s\n", path);
-		return;
+	img = 0;
+	len = 0;
+	if ((f = fs_lookup(path)) != 0) {
+		img = f->f_data;
+		len = *f->f_len;
+	} else {
+		unsigned lba, fsize;
+		unsigned char *buf;
+
+		if (iso_mounted() && iso_lookup(path, &lba, &fsize) == 0 &&
+		    (buf = cd_map(fsize)) != 0 &&
+		    atapi_read(lba, (fsize + 2047) / 2048, buf) == 0) {
+			img = buf;
+			len = fsize;
+			printf("exec %s: from ISO9660 (%d bytes)\n",
+			    path, fsize);
+		} else {
+			printf("no image for %s\n", path);
+			return;
+		}
 	}
 	argv[0] = (char *)path;
 	argc = 1;
@@ -750,9 +1081,19 @@ start_prog(const char *path, const char *script)
 	}
 	envp[0] = "PATH=/bin:/sbin";
 
-	pd = build_image(f->f_data, *f->f_len, &entry, argv, argc, envp, 1,
-	    &esp);
-	brk_mapped = USER_HEAP_START;
+	pd = build_image(img, len, &entry, argv, argc, envp, 1, &esp);
+
+
+	/* pid 1: the first user process, no parent */
+	bzero(procs, sizeof(procs));
+	cur = &procs[0];
+	cur->state = P_RUN;
+	cur->pid = 1;
+	cur->ppid = 0;
+	cur->pd = pd;
+	cur->brk_mapped = USER_HEAP_START;
+	next_pid = 2;
+
 	syscall_gate_init();
 	printf("exec %s: entry %x pd %x\n", path, entry, pd);
 	enter_user(pd, entry, esp);

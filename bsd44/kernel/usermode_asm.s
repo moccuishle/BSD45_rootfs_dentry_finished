@@ -49,3 +49,35 @@ _syscall_entry:
 	pop	%es
 	popal
 	iret
+
+/*
+ * void resume_user(unsigned pd, struct sysregs *r)
+ *
+ * Restore a saved user context (struct sysregs: ds, es, edi, esi, ebp,
+ * esp, ebx, edx, ecx, eax, eip, cs, eflags, uesp, ss) and return to ring 3.
+ * Never returns.
+ */
+	.globl	_resume_user
+	.align	4
+_resume_user:
+	movl	4(%esp), %eax		/* page directory */
+	movl	8(%esp), %esi		/* saved context */
+	movl	%eax, %cr3
+	movw	__udatasel, %ax
+	movw	%ax, %ds
+	movw	%ax, %es
+	movw	%ax, %fs
+	movw	%ax, %gs
+	pushl	56(%esi)		/* ss */
+	pushl	52(%esi)		/* user esp */
+	pushl	48(%esi)		/* eflags */
+	pushl	44(%esi)		/* cs */
+	pushl	40(%esi)		/* eip */
+	movl	24(%esi), %ebx
+	movl	28(%esi), %edx
+	movl	32(%esi), %ecx
+	movl	36(%esi), %eax
+	movl	16(%esi), %ebp
+	movl	8(%esi), %edi
+	movl	12(%esi), %esi		/* last: clobbers the frame pointer */
+	iret

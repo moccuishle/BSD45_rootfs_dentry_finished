@@ -1,7 +1,8 @@
 # capture_screenshot.ps1 - grab the VGA text console after the S3 demo runs.
 param(
     [string]$Iso = "",
-    [string]$OutPpm = ""
+    [string]$OutPpm = "",
+    [string[]]$Keys = @("usermode")
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,8 +13,8 @@ if (!$OutPpm) { $OutPpm = Join-Path $ws "build\screenshot.ppm" }
 $qemu = Get-Qemu
 if (!$qemu) { throw "qemu-system-i386.exe not found" }
 
-$serialPort = 5565
-$monPort = 4465
+$serialPort = 5580
+$monPort = 4480
 Remove-Item $OutPpm -Force -ErrorAction SilentlyContinue
 
 $p = Start-Process -FilePath $qemu -ArgumentList @(
@@ -52,9 +53,13 @@ function Wait-Text([string]$t, [int]$ms) {
 
 try {
     if (-not (Wait-Text "bsd44>" 20000)) { throw "no monitor prompt" }
-    $bytes = [Text.Encoding]::ASCII.GetBytes("usermode`r")
-    $sns.Write($bytes, 0, $bytes.Length); $sns.Flush()
-    [void](Wait-Text "user exit 3" 20000)
+    foreach ($k in $Keys) {
+        $bytes = [Text.Encoding]::ASCII.GetBytes($k + "`r")
+        $sns.Write($bytes, 0, $bytes.Length); $sns.Flush()
+        Pump 400
+        Start-Sleep -Milliseconds 700
+    }
+    [void](Wait-Text "user exit" 20000)
     Start-Sleep -Milliseconds 500
 
     $mon = New-Object System.Net.Sockets.TcpClient

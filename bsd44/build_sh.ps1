@@ -165,6 +165,9 @@ if (Compile-C (Join-Path $ws "userland\libc\ctype_table.c") "$obj\ctype_table.o"
 
 if ($fail) { Write-Host "$fail file(s) failed" -ForegroundColor Red; exit 1 }
 
+# libc-only object set (used for /bin/echo too)
+$libobjs = @($objs)
+
 # ---------------------------------------------------------------- sh sources
 if ($Target -eq "sh") {
     Write-Step "generating sh sources"
@@ -254,4 +257,19 @@ if ($LASTEXITCODE -ne 0) { Write-Host "link failed" -ForegroundColor Red; exit 1
 & $OC -O elf32-i386 -R .idata -R .reloc $pe $elf
 if ($LASTEXITCODE -ne 0) { Write-Host "objcopy failed" -ForegroundColor Red; exit 1 }
 Write-Host ("built {0} ({1:N0} bytes)" -f $elf, (Get-Item $elf).Length)
+
+if ($Target -eq "sh") {
+    # /bin/echo: the first external command, linked against the same libc.
+    $echoobj = "$obj\echo.o"
+    if (Compile-C (Join-Path $ws "userland\echo.c") $echoobj) {
+        $eobjs = @($libobjs) + @($echoobj)
+        & $LD -m i386pe -Ttext 0x08048000 -e _start --subsystem console -o "$bld\echo.pe" @eobjs $libgcc 2>&1 | Select-Object -First 20
+        if ($LASTEXITCODE -eq 0) {
+            & $OC -O elf32-i386 -R .idata -R .reloc "$bld\echo.pe" "$outd\echo.elf"
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host ("built {0} ({1:N0} bytes)" -f "$outd\echo.elf", (Get-Item "$outd\echo.elf").Length)
+            }
+        }
+    }
+}
 

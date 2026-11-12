@@ -92,6 +92,19 @@ execve + libc + /bin/sh**，最终 ISO 里是可执行的 i386 ELF 用户程序�
 
 尚未做：`/etc/rc`、`/dev/console`、mount 表、真 vnode/VFS、多 extent 文件。
 
+### S5 进程与外部命令 ✅
+
+- `struct uproc` 进程表（8 槽）+ `copy_address_space()` + `resume_user()`
+  （换 CR3、恢复寄存器、`iret`）；系统调用栈按协程式复用；
+- `fork/vfork/wait4/exit`：fork 复制地址空间；wait4 阻塞/唤醒；vfork 为
+  “复制 + 父进程阻塞到 exec/exit”的安全实现；
+- `getpid/getppid` 按进程表；`stat/access` 支持 ISO9660（sh 的 PATH 查找）；
+- `userland/echo.c` → `/BIN/ECHO.ELF`，sh 可以 `fork+execve+wait4` 跑它；
+- 验收：`tools/test_proc.ps1`（fork 退出 5、vfork+exec echo、wait4 回收）
+  以及 `shell` 里连续执行 `/bin/echo`、`$?` 为 0。
+
+尚未做：tty/termios、目录、pipe、页回收、真 vnode/VFS。
+
 
 ## 关键接口草案
 

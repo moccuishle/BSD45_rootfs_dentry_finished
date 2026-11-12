@@ -69,6 +69,8 @@ if (Test-Path $sh)    { Copy-Item $sh    "$isodir\BIN\SH.ELF"   -Force }
 if (Test-Path $init)  { Copy-Item $init  "$isodir\SBIN\INIT.ELF" -Force }
 if (Test-Path $hello) { Copy-Item $hello "$isodir\HELLO.ELF"    -Force }
 if (Test-Path $test)  { Copy-Item $test  "$isodir\TEST.ELF"     -Force }
+$echo = Join-Path $ws "out\userland\echo.elf"
+if (Test-Path $echo)  { Copy-Item $echo  "$isodir\BIN\ECHO.ELF"  -Force }
 Copy-Item "$bld\boot.img" "$isodir\boot.img" -Force
 Copy-Item "$ws\README-ISO.txt" "$isodir\README.TXT" -Force -ErrorAction SilentlyContinue
 
